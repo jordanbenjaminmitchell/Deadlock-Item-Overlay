@@ -186,21 +186,26 @@ try {
 
     # Enhanced vs regular copies of each item (Street Brawl), from the public data lake.
     # In match data, upgrade_info = 3<<16 marks an Enhanced copy (normal mode only ever has 1<<16).
-    $enhanced = $null; $enhSince = ''
+    $enhanced = $null; $enhancedHero = $null; $enhSince = ''
     $idList = (@($items | ForEach-Object { $_.id }) -join ',')
-    $tries = @($since.UtcDateTime, [DateTime]::UtcNow.AddDays(-3), [DateTime]::UtcNow.AddDays(-1))
+    $tries = @([DateTime]::UtcNow.AddDays(-7), [DateTime]::UtcNow.AddDays(-3), [DateTime]::UtcNow.AddDays(-1))
     foreach ($t in $tries) {
         $ts = $t.ToString('yyyy-MM-dd HH:mm:ss')
-        $q = "SELECT i, u, count(*) n, sum(CASE WHEN team = winning_team THEN 1 ELSE 0 END) w FROM (SELECT team, winning_team, unnest(""items.item_id"") i, unnest(""items.upgrade_info"") u FROM match_player WHERE game_mode='StreetBrawl' AND start_time > TIMESTAMP '$ts+00') WHERE i IN ($idList) GROUP BY 1,2"
+        $q = "SELECT hero_id h, i, u, count(*) n, sum(CASE WHEN team = winning_team THEN 1 ELSE 0 END) w FROM (SELECT hero_id, team, winning_team, unnest(""items.item_id"") i, unnest(""items.upgrade_info"") u FROM match_player WHERE game_mode='StreetBrawl' AND start_time > TIMESTAMP '$ts+00') WHERE i IN ($idList) GROUP BY 1,2,3"
         try {
             $rowsE = @(Invoke-RestMethod -Uri ($Api + '/v1/sql?query=' + [uri]::EscapeDataString($q)) -TimeoutSec 120 -UserAgent 'DeadlockItemOverlay/0.1 (personal use)')
             if ($rowsE.Count -gt 0 -and $null -ne $rowsE[0].i) {
                 $enhanced = [ordered]@{}
+                $enhancedHero = [ordered]@{}
                 foreach ($r in $rowsE) {
                     $id = [string]$r.i
+                    $hk = [string]$r.h
                     if (-not $enhanced.Contains($id)) { $enhanced[$id] = [ordered]@{ rn = 0; rw = 0; en = 0; ew = 0 } }
-                    if ([long]$r.u -eq 65536) { $enhanced[$id].rn += [long]$r.n; $enhanced[$id].rw += [long]$r.w }
-                    else { $enhanced[$id].en += [long]$r.n; $enhanced[$id].ew += [long]$r.w }
+                    if (-not $enhancedHero.Contains($hk)) { $enhancedHero[$hk] = [ordered]@{} }
+                    if (-not $enhancedHero[$hk].Contains($id)) { $enhancedHero[$hk][$id] = [ordered]@{ rn = 0; rw = 0; en = 0; ew = 0 } }
+                    $hrow = $enhancedHero[$hk][$id]
+                    if ([long]$r.u -eq 65536) { $enhanced[$id].rn += [long]$r.n; $enhanced[$id].rw += [long]$r.w; $hrow.rn += [long]$r.n; $hrow.rw += [long]$r.w }
+                    else { $enhanced[$id].en += [long]$r.n; $enhanced[$id].ew += [long]$r.w; $hrow.en += [long]$r.n; $hrow.ew += [long]$r.w }
                 }
                 $enhSince = $t.ToString('yyyy-MM-dd')
                 break
@@ -213,14 +218,14 @@ try {
         if (Test-Path $prevLatest) {
             try {
                 $pl = Get-Content $prevLatest -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($pl.enhanced) { $enhanced = $pl.enhanced; $enhSince = [string]$pl.enhanced_since; Write-Log '  kept enhanced stats from the previous refresh' }
+                if ($pl.enhanced) { $enhanced = $pl.enhanced; $enhancedHero = $pl.enhanced_hero; $enhSince = [string]$pl.enhanced_since; Write-Log '  kept enhanced stats from the previous refresh' }
             } catch { }
         }
     } else { Write-Log ('  enhanced stats: {0} items (since {1})' -f $enhanced.Count, $enhSince) }
 
     $snap = [ordered]@{
         date = $Today; collected_at = (Get-Date).ToString('s'); build = $build; since = $since.ToString('yyyy-MM-dd'); last_patch = $patchNote
-        source = $Api; enhanced = $enhanced; enhanced_since = $enhSince; items = $items; heroes = $heroes; hero_stats = $heroStats; item_stats = $itemStats
+        source = $Api; enhanced = $enhanced; enhanced_hero = $enhancedHero; enhanced_since = $enhSince; items = $items; heroes = $heroes; hero_stats = $heroStats; item_stats = $itemStats
     }
     $json = $snap | ConvertTo-Json -Depth 10 -Compress
     $snapPath = Join-Path $DayDir 'snapshot.json'

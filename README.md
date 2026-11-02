@@ -25,6 +25,9 @@ If Windows shows a "Windows protected your PC" prompt for a `.bat` file, click *
 - The window hides itself from screen capture, so the reader never reads its own text. Screenshots and recordings will not show it (`overlay-preview.bat` opens a visible copy with reading off).
 - Data reloads automatically within a minute after the daily refresh. Readings are logged to `data\screen_debug.txt`; the last shop screen is saved as `data\last_shop.png`.
 
+## Pick summary
+Double-click `summary.bat`. It opens a page (`data\summary.html`) with how often you took the overlay's top pick, the average rank of your picks, your win rate when you mostly took the top pick versus otherwise, a by-hero table and every logged match with its offers. What you bought and whether you won come from your public match history on deadlock-api.com (your Steam account is found automatically); matches the site has not picked up yet show as pending, using the picks the overlay read on screen.
+
 ## Command line check
 Open a Command Prompt in this folder:
 ```
@@ -42,6 +45,7 @@ Each run saves `data\<date>\snapshot.json`, updates `data\latest.json`, and writ
 ## How the ranking works
 - **Sort order = expected win %**: your hero's Street Brawl win rate in games where the item was picked. Small samples are pulled toward the hero's average (as if each item had 1,000 extra average games), so a lucky 300-game item cannot top the list. "vs avg" is the same number minus the hero's average.
 - **ENHANCED**: by default an Enhanced item shows the regular item's win rate, with an "enhanced" mark. Turn on **Enhanced boost** (pencil button, or **Ctrl+Alt+E**) to add a measured boost instead: Street Brawl match data marks Enhanced copies, so the overlay measures per item how much more Enhanced copies win than regular ones (all heroes), pulled toward the typical boost for that tier (about +1.3 to +2 pts for tiers 1 to 4, about 0 for tier 5) and never below 0.
+- **Per hero**: the Enhanced boost uses your hero's own Enhanced vs regular results (last 7 days of Street Brawl) when there are enough games, pulled toward the all-heroes boost when there are few.
 - **RARE**: a rare offer is one tier above the others; it is ranked by its own win rate like any item.
 - **GOOD FIT**: the game files tag each item "Good" or "Normal" per hero for the Street Brawl item draft. Shown for information; it does not change the score.
 - **buy rate**: how often the hero ends a game with the item. This is NOT pick rate when offered; the API does not record which items were offered.

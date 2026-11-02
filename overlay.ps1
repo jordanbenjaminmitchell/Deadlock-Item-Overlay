@@ -2,7 +2,8 @@
 # Detects your hero and the offered items from the screen, and ranks the items with Street Brawl stats.
 # Ctrl+Alt+D toggles click-through. Windows PowerShell 5.1, no downloads.
 
-param([switch]$Preview)   # -Preview: visible to screenshots, screen reading off (for checking the look)
+param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left')
+# -Preview: visible to screenshots, screen reading off. -Demo: also show a sample offer (hero, items separated by |).
 $ErrorActionPreference = 'Stop'
 trap { Add-Content -Path (Join-Path $PSScriptRoot 'overlay_error.log') -Value ((Get-Date).ToString('s') + ' ' + $_.Exception.Message) -Encoding UTF8; break }
 Add-Type -AssemblyName System.Windows.Forms
@@ -802,9 +803,15 @@ function Invoke-ScreenTick {
             $script:noShop++
             if ($script:noShop -ge 3) { $script:shopVisible = $false; Set-OverlayVisible $script:pinned }
         }
-        if ($read.Count -gt 0) {
-            if ($offerEvent -eq 'new') { New-Entry $script:offer $r.round $r.choice }
-            elseif ($offerEvent -eq 'grow' -and $script:entries.Count -gt 0) { $script:entries[$script:entries.Count - 1].offered = @($script:offer) }
+        if ($read.Count -gt 0 -and $r.choice -and $script:offer.Count -ge 2) {
+            # One log row per real offer: new when the choice changes or the set is replaced (re-roll).
+            $last = $null
+            if ($script:entries.Count -gt 0) { $last = $script:entries[$script:entries.Count - 1] }
+            $sameChoice = ($last -and $last.choice -eq $r.choice -and (-not $r.round -or -not $last.round -or $last.round -eq $r.round))
+            $overlap = 0
+            if ($last) { $overlap = @($script:offer | Where-Object { $last.offered -contains $_ }).Count }
+            if (-not $sameChoice -or $overlap -eq 0) { New-Entry $script:offer $r.round $r.choice }
+            elseif (-not $last.written) { $last.offered = @($script:offer) }
         }
         if ($r.purchased) { Record-Pick $r.purchased; $log += ('purchased: ' + $r.purchased) }
         $log += ('ocr lines: ' + (($r.lines | ForEach-Object { '[' + $_ + ']' }) -join ' '))
@@ -900,7 +907,21 @@ $form.Add_Shown({
     Update-Footer; Invoke-Rank
     # Keep this window out of screen captures, so the reader never reads its own text.
     $hidden = $false
-    if ($Preview) { $settings.auto = $false; Set-Status 'Preview mode: screen reading off' $colDim; return }
+    if ($Preview) {
+        $settings.auto = $false
+        if ($Demo) {
+            $form.Opacity = 1.0
+            $idx = $heroBox.Items.IndexOf($DemoHero)
+            if ($idx -ge 0) { $heroBox.SelectedIndex = $idx }
+            $script:enhancedNames = @($DemoEnhanced -split '\|' | Where-Object { $_ })
+            $script:rareNames = @($DemoRare -split '\|' | Where-Object { $_ })
+            $di = @($DemoItems -split '\|')
+            for ($k = 0; $k -lt 3; $k++) { if ($k -lt $di.Count) { $itemBoxes[$k].Text = $di[$k] } else { $itemBoxes[$k].Text = '' } }
+            Invoke-Rank
+            Set-Status $DemoStatus $colBrassDim
+        } else { Set-Status 'Preview mode: screen reading off' $colDim }
+        return
+    }
     try { $hidden = [ScreenReader]::SetWindowDisplayAffinity($form.Handle, 0x11) } catch { }
     if (-not $hidden) { $settings.auto = $false; Set-Status 'Screen reading off: this Windows version cannot hide the window from capture.' $colRed }
     elseif (-not $script:screenOk) { Set-Status ('Screen reading unavailable: ' + $script:screenError) $colRed }

@@ -3,6 +3,7 @@
 
 $script:PriorMatches = 1000      # shrinkage strength: small samples are pulled toward the hero average
 $script:EnhPrior     = 2000      # enhanced lift: pulled toward the tier's typical lift (as if 2,000 typical games)
+$script:EnhHeroPrior = 1000      # per-hero enhanced lift: pulled toward the all-heroes lift (as if 1,000 games)
 $script:ThinSample   = 1000      # flag items with fewer matches than this
 $script:CloseCall    = 1.0       # top two within this many points = close call
 
@@ -136,14 +137,30 @@ function Get-EnhancedPrior($Snap, $Tier) {
 # How much more an Enhanced copy of this item wins than a regular copy (points).
 # Pulled toward the tier's typical boost, and never below 0: an Enhanced copy has strictly better
 # numbers, so a negative reading reflects who picks it, not the item.
-function Get-EnhancedLift($Snap, $Item) {
+# Per hero when there is hero data: the hero's own Enhanced vs regular gap, pulled toward the item's
+# all-heroes boost (which is itself pulled toward the tier's typical boost). Never below 0.
+function Get-EnhancedLift($Snap, $Item, $HeroId) {
     $prior = Get-EnhancedPrior $Snap $Item.tier
     $e = $null
     if ($Snap.enhanced) { $e = $Snap.enhanced.([string]$Item.id) }
-    if ($null -eq $e -or $e.en -le 0 -or $e.rn -le 0) { return [pscustomobject]@{ lift = $prior; raw = $null; n = 0; prior = $prior } }
-    $raw = 100.0 * ($e.ew / $e.en - $e.rw / $e.rn)
-    $lift = ($e.en * $raw + $script:EnhPrior * $prior) / ($e.en + $script:EnhPrior)
-    return [pscustomobject]@{ lift = [Math]::Max(0.0, $lift); raw = $raw; n = [int]$e.en; prior = $prior }
+    $itemLift = $prior; $raw = $null; $n = 0
+    if ($e -and $e.en -gt 0 -and $e.rn -gt 0) {
+        $raw = 100.0 * ($e.ew / $e.en - $e.rw / $e.rn)
+        $itemLift = ($e.en * $raw + $script:EnhPrior * $prior) / ($e.en + $script:EnhPrior)
+        $n = [int]$e.en
+    }
+    $lift = $itemLift; $heroRaw = $null; $heroN = 0
+    $he = $null
+    if ($Snap.enhanced_hero -and $HeroId) {
+        $hh = $Snap.enhanced_hero.([string]$HeroId)
+        if ($hh) { $he = $hh.([string]$Item.id) }
+    }
+    if ($he -and $he.en -gt 0 -and $he.rn -gt 0) {
+        $heroRaw = 100.0 * ($he.ew / $he.en - $he.rw / $he.rn)
+        $heroN = [int]$he.en
+        $lift = ($heroN * $heroRaw + $script:EnhHeroPrior * $itemLift) / ($heroN + $script:EnhHeroPrior)
+    }
+    return [pscustomobject]@{ lift = [Math]::Max(0.0, $lift); raw = $raw; n = $n; prior = $prior; heroRaw = $heroRaw; heroN = $heroN }
 }
 
 function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhancedBoost = $true) {
@@ -176,7 +193,7 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
             $o.delta = 100.0 * ($adj - $base)
             $o.score = $o.delta
             if ($o.enhanced) {
-                $el = Get-EnhancedLift $Snap $it
+                $el = Get-EnhancedLift $Snap $it $Hero.id
                 $o.enhLift = $el
                 if ($UseEnhancedBoost) { $o.score += $el.lift }
             }
