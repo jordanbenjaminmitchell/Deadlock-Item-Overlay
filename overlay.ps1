@@ -12,6 +12,7 @@ Add-Type -AssemblyName System.Drawing
 $script:screenOk = $false
 $script:screenError = ''
 try { . (Join-Path $PSScriptRoot 'screen.ps1'); $script:screenOk = $true } catch { $script:screenError = $_.Exception.Message }
+. (Join-Path $PSScriptRoot 'summary.ps1')
 
 if (-not ('OverlayForm' -as [type])) {
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
@@ -42,9 +43,10 @@ public class OverlayForm : Form {
         HotkeyOk = RegisterHotKey(this.Handle, 1, 0x0001 | 0x0002 | 0x4000, (uint)Keys.D);
         RegisterHotKey(this.Handle, 2, 0x0001 | 0x0002 | 0x4000, (uint)Keys.S);
         RegisterHotKey(this.Handle, 3, 0x0001 | 0x0002 | 0x4000, (uint)Keys.E);
+        RegisterHotKey(this.Handle, 4, 0x0001 | 0x0002 | 0x4000, (uint)Keys.T);
         try { int round = 2; DwmSetWindowAttribute(this.Handle, 33, ref round, 4); } catch { }
     }
-    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); base.OnHandleDestroyed(e); }
+    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); UnregisterHotKey(this.Handle, 4); base.OnHandleDestroyed(e); }
     protected override void WndProc(ref Message m) {
         if (m.Msg == WM_HOTKEY && HotkeyPressed != null) { LastHotkey = (int)m.WParam; HotkeyPressed(this, EventArgs.Empty); }
         base.WndProc(ref m);
@@ -287,6 +289,9 @@ function New-IconButton([string]$Glyph) {
     $b.ForeColor = $colBrassDim
     return $b
 }
+$statsBtn = New-IconButton ([string][char]0xE9D2)
+$statsBtn.SetBounds(($header.Width - (S 84)), (S 2), (S 26), (S 24))
+$header.Controls.Add($statsBtn)
 $editBtn = New-IconButton ([string][char]0xE70F)
 $editBtn.SetBounds(($header.Width - (S 56)), (S 2), (S 26), (S 24))
 $header.Controls.Add($editBtn)
@@ -451,6 +456,7 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
     $g.SmoothingMode = 'AntiAlias'
     $g.TextRenderingHint = 'ClearTypeGridFit'
     $v = $script:view
+    if ($v.kind -eq 'stats') { return (Draw-Stats $g $Width $Paint) }
     if ($v.kind -eq 'msg') {
         $d = S 86
         if ($Paint) {
@@ -518,6 +524,103 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
     return [int]$y
 }
 
+function Draw-SectionTitle($g, [string]$Text, [float]$y, [int]$Width, [bool]$Paint) {
+    if ($Paint) {
+        $g.DrawString($Text, $fontTiny, (Get-Brush $colBrass), [float]0, $y)
+        $tw = $g.MeasureString($Text, $fontTiny).Width
+        $pen = New-Object Drawing.Pen($colLine, 1)
+        $g.DrawLine($pen, [float]($tw + (S 6)), [float]($y + (S 8)), [float]$Width, [float]($y + (S 8)))
+        $pen.Dispose()
+    }
+    return (S 22)
+}
+
+# Stats view: your pick summary and the Street Brawl hero tier list.
+function Draw-Stats($g, [int]$Width, [bool]$Paint) {
+    $y = [float](S 2)
+    $ps = $script:pickSummary
+    $y += Draw-SectionTitle $g 'Your picks' $y $Width $Paint
+    $blocks = @()
+    if ($ps -and $ps.known -gt 0) {
+        $blocks += ,@(('{0:0}%' -f (100.0 * $ps.top / $ps.known)), ('took the top pick ({0} of {1})' -f $ps.top, $ps.known))
+        $blocks += ,@(('{0:0.0}' -f $ps.avgRank), 'average rank of your pick')
+        $blocks += ,@((Format-WinRate $ps.followed), ('win rate when you mostly took the top pick; otherwise ' + (Format-WinRate $ps.other)))
+    } else {
+        $msg = 'No picks with a known result yet.'
+        if ($ps -and $ps.note) { $msg = $ps.note }
+        $y += (Draw-CenteredText $g $msg $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 8)
+    }
+    if ($blocks.Count -gt 0) {
+        $bw = [float](($Width - (S 12)) / 3)
+        $maxH = 0
+        for ($k = 0; $k -lt $blocks.Count; $k++) {
+            $bx = $k * ($bw + (S 6))
+            $h1 = Draw-CenteredText $g $blocks[$k][0] $fontNum $colText $bx $y $bw $Paint
+            $h2 = Draw-CenteredText $g $blocks[$k][1] $fontSmall $colBrassDim $bx ($y + $h1) $bw $Paint
+            if (($h1 + $h2) -gt $maxH) { $maxH = $h1 + $h2 }
+        }
+        $y += $maxH + (S 6)
+    }
+    if ($ps -and $ps.pending -gt 0) {
+        $y += (Draw-CenteredText $g ('{0} match(es) not on the stats site yet; their picks come from the overlay''s own reading.' -f $ps.pending) $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 6)
+    }
+    $y += (S 6)
+    $y += Draw-SectionTitle $g 'Hero tier list' $y $Width $Paint
+    $ht = @($script:heroTable)
+    $cur = Get-SelectedHero
+    $half = [int][Math]::Ceiling($ht.Count / 2)
+    $colW = [float](($Width - (S 12)) / 2)
+    $rowH = S 17
+    for ($i = 0; $i -lt $ht.Count; $i++) {
+        $r = $ht[$i]
+        $col = [int][Math]::Floor($i / $half)
+        $row = $i % $half
+        if ($Paint) {
+            $x0 = $col * ($colW + (S 12))
+            $yy = $y + $row * $rowH
+            $c = $colText2
+            if ($ps -and $ps.heroesPlayed.ContainsKey($r.name)) { $c = $colBrass }
+            if ($cur -and $cur.name -eq $r.name) {
+                $g.FillRectangle((Get-Brush (C 52 38 27)), [float]($x0 - (S 2)), [float]$yy, [float]($colW + (S 4)), [float]$rowH)
+                $c = $colText
+            }
+            $g.DrawString(('{0}' -f $r.rank), $fontSmall, (Get-Brush $colBrassDim), [float]$x0, [float]$yy)
+            $g.DrawString((Get-HeroTier $r.winrate), $fontTiny, (Get-Brush $colBrass), [float]($x0 + (S 24)), [float]($yy + (S 1)))
+            $g.DrawString($r.name, $fontSmall, (Get-Brush $c), [float]($x0 + (S 40)), [float]$yy)
+            $pt = '{0:0.0}%' -f $r.winrate
+            $pw = $g.MeasureString($pt, $fontSmall).Width
+            $g.DrawString($pt, $fontSmall, (Get-Brush $c), [float]($x0 + $colW - $pw), [float]$yy)
+        }
+    }
+    $y += $half * $rowH + (S 6)
+    $y += (Draw-CenteredText $g 'Street Brawl win rate since the last big patch. Gold = heroes you played.' $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 4)
+    return [int]$y
+}
+
+$script:statsMode = $false
+$script:pickSummary = $null
+$script:pickSummaryAt = [datetime]::MinValue
+function Show-Stats {
+    if ($null -eq $script:pickSummary -or ((Get-Date) - $script:pickSummaryAt).TotalMinutes -gt 3) {
+        try { $script:pickSummary = Get-PickSummary $script:snap $PSScriptRoot } catch { $script:pickSummary = [pscustomobject]@{ known = 0; note = 'Pick summary unavailable: ' + $_.Exception.Message; pending = 0; heroesPlayed = @{} } }
+        $script:pickSummaryAt = Get-Date
+    }
+    $script:view = [pscustomobject]@{ kind = 'stats'; text = ''; color = $colText; result = $null; compact = $false }
+    Update-View
+}
+function Switch-Stats {
+    $script:statsMode = -not $script:statsMode
+    if ($script:statsMode) {
+        $statsBtn.ForeColor = $colBrass
+        Set-OverlayVisible $true
+        Show-Stats
+    } else {
+        $statsBtn.ForeColor = $colBrassDim
+        Invoke-Rank
+    }
+}
+$statsBtn.Add_Click({ Switch-Stats })
+
 $cards.Add_Paint({ param($s, $e) [void](Draw-View $e.Graphics $cards.Width $true) })
 
 function Update-View {
@@ -562,6 +665,7 @@ function Get-SelectedHero {
 }
 
 function Invoke-Rank {
+    if ($script:statsMode) { Show-Stats; return }
     try {
         $h = Get-SelectedHero
         if ($null -eq $h) { Show-Message 'Waiting for your hero' $colDim; return }
@@ -628,6 +732,7 @@ $topBtn.Add_Click({ Invoke-Top })
 $clearBtn.Add_Click({ $script:offer = @(); $script:offerChoice = ''; $script:enhancedNames = @(); $script:rareNames = @(); $script:tooltipStats = @{}; foreach ($cb in $itemBoxes) { $cb.Text = '' }; Invoke-Rank })
 $form.Add_HotkeyPressed({
     if ($form.LastHotkey -eq 3) { Switch-Boost; return }
+    if ($form.LastHotkey -eq 4) { Switch-Stats; return }
     if ($form.LastHotkey -eq 2) {
         # Ctrl+Alt+S: pin the window visible outside the item phase (or unpin).
         $script:pinned = -not $script:pinned
@@ -815,7 +920,7 @@ function Invoke-ScreenTick {
             $script:noShop = 0; $script:shopVisible = $true; Set-OverlayVisible $true
         } else {
             $script:noShop++
-            if ($script:noShop -ge 3) { $script:shopVisible = $false; Set-OverlayVisible $script:pinned }
+            if ($script:noShop -ge 3) { $script:shopVisible = $false; Set-OverlayVisible ($script:pinned -or $script:statsMode) }
         }
         if ($read.Count -gt 0 -and $r.choice -and $script:offer.Count -ge 2) {
             # One log row per real offer: new when the choice changes or the set is replaced (re-roll).
@@ -849,6 +954,7 @@ function Invoke-ScreenTick {
             }
             if ($key -eq $script:lastItemsKey -and $rerank) { Invoke-Rank; Update-EntryRanking; $changed = $true }
             if ($key -ne $script:lastItemsKey) {
+                if ($script:statsMode) { $script:statsMode = $false; $statsBtn.ForeColor = $colBrassDim }
                 $script:lastItemsKey = $key
                 $script:lastNamesKey = $namesKey
                 $script:enhancedNames = $enh
