@@ -16,7 +16,6 @@ If Windows shows a "Windows protected your PC" prompt for a `.bat` file, click *
 
 ## Overlay window
 - The header shows your hero (detected from the 4 ability icons at the bottom of the HUD) and one status line: choice number, re-rolls left and how often you took the top pick this match during the shop, your hero's average win rate otherwise.
-- The look follows the Deadlock shop: dark brown with brass hairlines and art-deco corners. Each offered item is a medallion with the item's real shop icon, left to right in the same order as the shop. The inner ring color is the item slot (orange weapon, green vitality, purple spirit). The best pick is larger with a thicker ring and a "Best pick" label.
 - Under each medallion: expected win %, the name, points vs your hero's Street Brawl average win rate (shown, for example "+2.9 vs 52.3% avg"), brass marks for enhanced (with its boost), rare and few games, in-game tooltip values when you hover the item in the shop, and your own note from `notes.json`.
 - Screen reading is always on while Deadlock is the active window. It reads every 1.5 s: item names (including tilted rare names), ENHANCED and RARE tags, choice and re-rolls, the hovered tooltip, and the "Item purchased" panel.
 - **Hides itself outside the item phase** (a few seconds after the shop closes) and comes back when it opens, without taking focus from the game. **Ctrl+Alt+S** keeps it always visible (press again to undo). It always shows when Deadlock is not the active window.
