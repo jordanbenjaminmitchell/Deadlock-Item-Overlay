@@ -1,0 +1,4 @@
+{
+  "about": "Your own notes, shown after the stats. Format: hero name -> item name -> one short line. Example: \"Ivy\": { \"Toxic Bullets\": \"Pick vs tanky teams\" }",
+  "heroes": {}
+}
