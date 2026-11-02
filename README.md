@@ -56,3 +56,12 @@ Each run saves `data\<date>\snapshot.json`, updates `data\latest.json`, and writ
 
 ## License
 MIT. See `LICENSE`.
+
+## Screenshots
+![A real Street Brawl shop (left) and the overlay ranking the same offer (right)](docs/shop-and-overlay.png)
+
+A real Street Brawl shop with two rare items, and the overlay ranking that same offer for Viscous.
+
+![The overlay ranking an Ivy offer](docs/overlay.png)
+
+An Ivy offer: Burst Fire is enhanced. With the Enhanced boost off it shows the regular item's win rate and an "enhanced" mark.
