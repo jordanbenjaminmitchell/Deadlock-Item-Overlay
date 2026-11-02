@@ -4,9 +4,15 @@ A small always-on-top window that reads the Street Brawl item offer from your sc
 
 Nothing to install: it uses Windows PowerShell and Windows' built-in text recognition.
 
-## Start
-1. Double-click `collect.bat` once (about 1 to 2 minutes). It downloads the Street Brawl stats, item names and hero ability icons into `data\`.
-2. Double-click `overlay.bat` (or `overlay-debug.bat` to see errors in a console). Deadlock can already be running; it must be in borderless windowed mode for the window to show over it.
+## Download and start
+Requirements: Windows 10 (version 2004 or newer) or Windows 11, and Deadlock in borderless windowed mode (the overlay cannot draw over exclusive fullscreen).
+
+1. Click the green **Code** button on this page, then **Download ZIP**, and extract it to any folder (for example `Documents\DeadlockItemOverlay`).
+2. Double-click `collect.bat` once (a few minutes the first time). It downloads the Street Brawl stats, item names, hero ability icons and item icons into a `data` folder next to the scripts.
+3. Double-click `overlay.bat`. Deadlock can already be running. Use `overlay-debug.bat` instead to see any errors in a console.
+4. Optional: double-click `setup-daily-refresh.bat` to refresh the stats once a day automatically.
+
+If Windows shows a "Windows protected your PC" prompt for a `.bat` file, click **More info**, then **Run anyway**. Everything runs on built-in Windows PowerShell; nothing is installed.
 
 ## Overlay window
 - The header shows your hero (detected from the 4 ability icons at the bottom of the HUD) and one status line: choice number, re-rolls left and how often you took the top pick this match during the shop, your hero's average win rate otherwise.
@@ -46,4 +52,8 @@ Each run saves `data\<date>\snapshot.json`, updates `data\latest.json`, and writ
 
 ## Limits
 - Win rate with an item is not proof the item caused the win; it is the best public signal.
-- The overlay only reads public stats and your screen. No game memory, no injection.
+- The overlay only reads public stats and your screen. No game memory reading, no injection, no input to the game.
+- Not affiliated with or endorsed by Valve. Deadlock and its item art belong to Valve; stats come from the community-run [deadlock-api.com](https://deadlock-api.com).
+
+## License
+MIT. See `LICENSE`.
