@@ -389,7 +389,12 @@ function Draw-ItemColumn($g, $x, [int]$Rank, [float]$left, [float]$colW, [float]
     $y += (Draw-CenteredText $g $num $nf $colText $left $y $colW $Paint) - (S 2)
     $y += (Draw-CenteredText $g $x.name $fontName $colText2 $left $y $colW $Paint) + (S 1)
     $tags = @()
-    if ($null -ne $x.score) { $tags += ('{0:+0.0;-0.0;0.0} vs avg' -f $x.score) }
+    if ($null -ne $x.score) {
+        $base = $null
+        if ($script:view.result) { $base = $script:view.result.baseline }
+        if ($null -ne $base) { $tags += ('{0:+0.0;-0.0;0.0} vs {1:0.0}% avg' -f $x.score, $base) }
+        else { $tags += ('{0:+0.0;-0.0;0.0} vs avg' -f $x.score) }
+    }
     $line2 = ($tags -join '')
     $marks = @()
     if ($x.enhanced) {
