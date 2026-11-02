@@ -92,6 +92,7 @@ function Load-Data {
     $script:snapTime = (Get-Item $LatestPath).LastWriteTime
     $script:shop = @(Get-ShopItems $script:snap | Sort-Object name)
     $script:heroes = @(Get-PlayableHeroes $script:snap)
+    $script:heroTable = @(Get-HeroTable $script:snap)
     if ($script:screenOk) { $script:templateCount = [ScreenReader]::LoadTemplates($IconDir) }
 }
 
@@ -251,7 +252,20 @@ $header.Add_Paint({
     $title = 'Detecting hero'
     if ($h) { $title = $h.name }
     $sfc = New-Object Drawing.StringFormat; $sfc.Alignment = 'Center'
-    $g.DrawString($title, $fontHero, (Get-Brush $colText), (New-Object Drawing.RectangleF(0, (S 4), $hw, (S 30))), $sfc)
+    $stand = ''
+    if ($h -and $script:heroTable) {
+        $hr = $script:heroTable | Where-Object { $_.id -eq [string]$h.id } | Select-Object -First 1
+        if ($hr) { $stand = '{0:0.0}%   |   #{1} of {2}' -f $hr.winrate, $hr.rank, $script:heroTable.Count }
+    }
+    if ($stand) {
+        $tw = $g.MeasureString($title, $fontHero).Width
+        $sw = $g.MeasureString($stand, $fontTiny).Width
+        $x0 = ($hw - ($tw + (S 8) + $sw)) / 2
+        $g.DrawString($title, $fontHero, (Get-Brush $colText), [float]$x0, [float](S 4))
+        $g.DrawString($stand, $fontTiny, (Get-Brush $colBrassDim), [float]($x0 + $tw + (S 8)), [float](S 14))
+    } else {
+        $g.DrawString($title, $fontHero, (Get-Brush $colText), (New-Object Drawing.RectangleF(0, (S 4), $hw, (S 30))), $sfc)
+    }
     $sub = $script:subtitle
     if ($sub) {
         $tw = $g.MeasureString($sub, $fontSmall).Width

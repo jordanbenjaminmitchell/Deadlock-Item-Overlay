@@ -252,3 +252,24 @@ function Select-BestByTier($Ranked, [int]$PerTier = 2) {
         $ok | Where-Object { [int]$_.tier -eq $t } | Sort-Object -Property @{ Expression = 'score'; Descending = $true } | Select-Object -First $PerTier
     }
 }
+
+# Street Brawl standing of every hero (win rate, play share), best first. Heroes under 1,000 games are left out.
+function Get-HeroTable($Snap) {
+    $rows = @()
+    $tot = 0
+    foreach ($p in $Snap.hero_stats.street_brawl.PSObject.Properties) { $tot += [double]$p.Value.matches }
+    $games = $tot / 8.0
+    foreach ($h in (Get-PlayableHeroes $Snap)) {
+        $hs = $Snap.hero_stats.street_brawl.([string]$h.id)
+        if (-not $hs -or $hs.matches -lt 1000) { continue }
+        $pick = 0.0
+        if ($games -gt 0) { $pick = 100.0 * $hs.matches / $games }
+        $rows += [pscustomobject]@{ id = [string]$h.id; name = $h.name; winrate = 100.0 * $hs.wins / $hs.matches; matches = [long]$hs.matches; pickrate = $pick }
+    }
+    $rows = @($rows | Sort-Object winrate -Descending)
+    for ($i = 0; $i -lt $rows.Count; $i++) { $rows[$i] | Add-Member -NotePropertyName rank -NotePropertyValue ($i + 1) -Force }
+    return $rows
+}
+function Get-HeroTier([double]$WinRate) {
+    if ($WinRate -ge 55) { return 'S' } elseif ($WinRate -ge 51) { return 'A' } elseif ($WinRate -ge 47) { return 'B' } elseif ($WinRate -ge 44) { return 'C' } else { return 'D' }
+}

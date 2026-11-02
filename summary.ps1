@@ -170,6 +170,19 @@ foreach ($st in @(@($topRate, "took the top pick ($top of $known)"), @($avgRank,
 }
 [void]$sbH.Append("</div>")
 
+# Hero tier list (Street Brawl, since the last big patch)
+$ht = @(Get-HeroTable $snap)
+$played = @{}
+foreach ($mr in $matchRows) { if ($mr.hero) { $played[$mr.hero] = 1 } }
+[void]$sbH.Append("<h2>Hero tier list</h2><div class='dim' style='font-size:12px;margin-bottom:8px'>Street Brawl win rate and how often each hero is picked, from $(Enc $snap.since) to $(Enc $snap.date). Tiers: S 55%+, A 51%+, B 47%+, C 44%+, D below. <span class=top>Gold</span> = heroes you played.</div>")
+[void]$sbH.Append("<table><tr><th>#</th><th>Tier</th><th>Hero</th><th>Win rate</th><th>Picked in</th><th>Games</th></tr>")
+foreach ($r in $ht) {
+    $cls = ''
+    if ($played.ContainsKey($r.name)) { $cls = " class='top'" }
+    [void]$sbH.Append(("<tr{0}><td>{1}</td><td>{2}</td><td>{3}</td><td>{4:0.0}%</td><td>{5:0}% of matches</td><td>{6:N0}</td></tr>" -f $cls, $r.rank, (Get-HeroTier $r.winrate), (Enc $r.name), $r.winrate, $r.pickrate, $r.matches))
+}
+[void]$sbH.Append("</table>")
+
 [void]$sbH.Append("<h2>By hero</h2><table><tr><th>Hero</th><th>Matches</th><th>Top pick</th><th>Win rate</th></tr>")
 foreach ($g in ($matchRows | Group-Object hero | Sort-Object Count -Descending)) {
     $k = ($g.Group | Measure-Object known -Sum).Sum; $t = ($g.Group | Measure-Object top -Sum).Sum

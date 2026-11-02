@@ -15,7 +15,7 @@ Requirements: Windows 10 (version 2004 or newer) or Windows 11, and Deadlock in 
 If Windows shows a "Windows protected your PC" prompt for a `.bat` file, click **More info**, then **Run anyway**. Everything runs on built-in Windows PowerShell; nothing is installed.
 
 ## Overlay window
-- The header shows your hero (detected from the 4 ability icons at the bottom of the HUD) and one status line: choice number, re-rolls left and how often you took the top pick this match during the shop, your hero's average win rate otherwise.
+- The header shows your hero (detected from the 4 ability icons at the bottom of the HUD) with its Street Brawl win rate and rank among all heroes and one status line: choice number, re-rolls left and how often you took the top pick this match during the shop, your hero's average win rate otherwise.
 - Under each medallion: expected win %, the name, points vs your hero's Street Brawl average win rate (shown, for example "+2.9 vs 52.3% avg"), brass marks for enhanced (with its boost), rare and few games, in-game tooltip values when you hover the item in the shop, and your own note from `notes.json`.
 - Screen reading is always on while Deadlock is the active window. It reads every 1.5 s: item names (including tilted rare names), ENHANCED and RARE tags, choice and re-rolls, the hovered tooltip, and the "Item purchased" panel.
 - **Hides itself outside the item phase** (a few seconds after the shop closes) and comes back when it opens, without taking focus from the game. **Ctrl+Alt+S** keeps it always visible (press again to undo). It always shows when Deadlock is not the active window.
@@ -26,7 +26,7 @@ If Windows shows a "Windows protected your PC" prompt for a `.bat` file, click *
 - Data reloads automatically within a minute after the daily refresh. Readings are logged to `data\screen_debug.txt`; the last shop screen is saved as `data\last_shop.png`.
 
 ## Pick summary
-Double-click `summary.bat`. It opens a page (`data\summary.html`) with how often you took the overlay's top pick, the average rank of your picks, your win rate when you mostly took the top pick versus otherwise, a by-hero table and every logged match with its offers. What you bought and whether you won come from your public match history on deadlock-api.com (your Steam account is found automatically); matches the site has not picked up yet show as pending, using the picks the overlay read on screen.
+Double-click `summary.bat`. It opens a page (`data\summary.html`) with how often you took the overlay's top pick, the average rank of your picks, your win rate when you mostly took the top pick versus otherwise, a by-hero table, every logged match with its offers, and a Street Brawl hero tier list (win rate, how often each hero is picked, tier S to D). What you bought and whether you won come from your public match history on deadlock-api.com (your Steam account is found automatically); matches the site has not picked up yet show as pending, using the picks the overlay read on screen.
 
 ## Command line check
 Open a Command Prompt in this folder:
