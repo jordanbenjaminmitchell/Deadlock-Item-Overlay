@@ -146,7 +146,7 @@ function Get-EnhancedLift($Snap, $Item) {
     return [pscustomobject]@{ lift = [Math]::Max(0.0, $lift); raw = $raw; n = [int]$e.en; prior = $prior }
 }
 
-function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @()) {
+function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhancedBoost = $true) {
     $hid = [string]$Hero.id
     $hs = $Snap.hero_stats.street_brawl.$hid
     if ($null -eq $hs -or $hs.matches -eq 0) { throw "No Street Brawl data for $($Hero.name)." }
@@ -178,7 +178,7 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @()) {
             if ($o.enhanced) {
                 $el = Get-EnhancedLift $Snap $it
                 $o.enhLift = $el
-                $o.score += $el.lift
+                if ($UseEnhancedBoost) { $o.score += $el.lift }
             }
             $o.expected = 100.0 * $base + $o.score
             $o.buyrate = 100.0 * $r.m / $hs.matches
@@ -202,7 +202,7 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @()) {
             else { $parts += ('Weak for {0}: {1:+0.0;-0.0;0.0} pts vs average.' -f $Hero.name, $d) }
         }
         $x.verdict = $parts[$parts.Count - 1]
-        if ($x.enhanced -and $x.enhLift) {
+        if ($x.enhanced -and $x.enhLift -and $UseEnhancedBoost) {
             if ($null -ne $x.enhLift.raw) {
                 $parts += ('Enhanced copies won {0:+0.0;-0.0;0.0} pts vs regular ({1:N0} games, all heroes); counted as {2:+0.0;-0.0;0.0} (tier typical {3:+0.0;-0.0;0.0}, never below 0).' -f $x.enhLift.raw, $x.enhLift.n, $x.enhLift.lift, $x.enhLift.prior)
             } else {

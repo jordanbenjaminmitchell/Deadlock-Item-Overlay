@@ -40,9 +40,10 @@ public class OverlayForm : Form {
         base.OnHandleCreated(e);
         HotkeyOk = RegisterHotKey(this.Handle, 1, 0x0001 | 0x0002 | 0x4000, (uint)Keys.D);
         RegisterHotKey(this.Handle, 2, 0x0001 | 0x0002 | 0x4000, (uint)Keys.S);
+        RegisterHotKey(this.Handle, 3, 0x0001 | 0x0002 | 0x4000, (uint)Keys.E);
         try { int round = 2; DwmSetWindowAttribute(this.Handle, 33, ref round, 4); } catch { }
     }
-    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); base.OnHandleDestroyed(e); }
+    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); base.OnHandleDestroyed(e); }
     protected override void WndProc(ref Message m) {
         if (m.Msg == WM_HOTKEY && HotkeyPressed != null) { LastHotkey = (int)m.WParam; HotkeyPressed(this, EventArgs.Empty); }
         base.WndProc(ref m);
@@ -77,6 +78,7 @@ $settings = Read-JsonFile $SettingsPath
 if ($null -eq $settings) { $settings = [pscustomobject]@{ x = 60; y = 240; opacity = 0.95; auto = $true } }
 if ($null -eq $settings.PSObject.Properties['auto']) { $settings | Add-Member -NotePropertyName auto -NotePropertyValue $true }
 $settings.auto = $true
+if ($null -eq $settings.PSObject.Properties['enhBoost']) { $settings | Add-Member -NotePropertyName enhBoost -NotePropertyValue $false }
 
 $script:snap = $null
 $script:snapTime = $null
@@ -281,7 +283,7 @@ $header.Controls.Add($closeBtn)
 # Manual controls, hidden until the edit button is pressed.
 $manual = New-Object Windows.Forms.Panel
 $manual.BackColor = $colBg
-$manual.SetBounds((S 22), (S 70), ($W - (S 44)), (S 70))
+$manual.SetBounds((S 22), (S 70), ($W - (S 44)), (S 100))
 $manual.Visible = $false
 $form.Controls.Add($manual)
 $mw = $manual.Width
@@ -309,6 +311,21 @@ for ($k = 0; $k -lt 3; $k++) {
     $manual.Controls.Add($cb)
     $itemBoxes += $cb
 }
+$boostBtn = New-FlatButton ''
+$boostBtn.SetBounds(0, (S 68), $mw, (S 26))
+$manual.Controls.Add($boostBtn)
+function Update-BoostButton {
+    if ($settings.enhBoost) { $boostBtn.Text = 'Enhanced boost: on (Ctrl+Alt+E)'; $boostBtn.ForeColor = $colBrass }
+    else { $boostBtn.Text = 'Enhanced boost: off, regular win rate (Ctrl+Alt+E)'; $boostBtn.ForeColor = $colText2 }
+}
+function Switch-Boost {
+    $settings.enhBoost = -not $settings.enhBoost
+    Update-BoostButton
+    Invoke-Rank
+}
+$boostBtn.Add_Click({ Switch-Boost })
+Update-BoostButton
+
 $editBtn.Add_Click({
     $manual.Visible = -not $manual.Visible
     if ($manual.Visible) { $editBtn.ForeColor = $colBrass } else { $editBtn.ForeColor = $colBrassDim }
@@ -398,7 +415,7 @@ function Draw-ItemColumn($g, $x, [int]$Rank, [float]$left, [float]$colW, [float]
     $line2 = ($tags -join '')
     $marks = @()
     if ($x.enhanced) {
-        if ($x.enhLift) { $marks += ('enhanced {0:+0.0;-0.0;0.0}' -f $x.enhLift.lift) } else { $marks += 'enhanced' }
+        if ($x.enhLift -and $settings.enhBoost) { $marks += ('enhanced {0:+0.0;-0.0;0.0}' -f $x.enhLift.lift) } else { $marks += 'enhanced' }
     }
     if ($script:rareNames -contains $x.name) { $marks += 'rare' }
     if ($x.thin -and $x.matches -gt 0) { $marks += 'few games' }
@@ -542,7 +559,7 @@ function Invoke-Rank {
         }
         if ($picked.Count -eq 0 -and $missing.Count -eq 0) { Show-Message 'Waiting for the shop' $colDim; return }
         if ($picked.Count -eq 0) { Show-Message ('Not recognized: ' + ($missing -join ', ')) $colRed; return }
-        $res = Get-ItemRanking $script:snap $h $picked $script:enhancedNames
+        $res = Get-ItemRanking $script:snap $h $picked $script:enhancedNames ([bool]$settings.enhBoost)
         $script:lastRanking = $res
         Show-Ranking $res $false
         if ($missing.Count -gt 0) { Set-Status ('Not recognized: ' + ($missing -join ', ')) $colRed }
@@ -595,6 +612,7 @@ foreach ($cb in $itemBoxes) {
 $topBtn.Add_Click({ Invoke-Top })
 $clearBtn.Add_Click({ $script:offer = @(); $script:offerChoice = ''; $script:enhancedNames = @(); $script:rareNames = @(); $script:tooltipStats = @{}; foreach ($cb in $itemBoxes) { $cb.Text = '' }; Invoke-Rank })
 $form.Add_HotkeyPressed({
+    if ($form.LastHotkey -eq 3) { Switch-Boost; return }
     if ($form.LastHotkey -eq 2) {
         # Ctrl+Alt+S: pin the window visible outside the item phase (or unpin).
         $script:pinned = -not $script:pinned
