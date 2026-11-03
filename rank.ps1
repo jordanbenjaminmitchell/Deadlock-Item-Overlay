@@ -48,7 +48,7 @@ try {
         if ($null -eq $x.delta) {
             Write-Host ('#{0} {1} (T{2} {3}) - no data' -f $n, $x.name, $x.tier, $x.slot) -ForegroundColor $color
         } else {
-            $line = '#{0} {1} (T{2} {3})  expected win {4:0.0}% ({5:+0.0;-0.0;0.0} vs avg)  buy rate {6:0}%  n={7:N0}' -f $n, $x.name, $x.tier, $x.slot, $x.expected, $x.score, $x.buyrate, $x.matches
+            $line = '#{0} {1} (T{2} {3})  expected win {4:0.0}% ({5:+0.0;-0.0;0.0} vs tier avg)  buy rate {6:0}%  n={7:N0}' -f $n, $x.name, $x.tier, $x.slot, $x.expected, $x.score, $x.buyrate, $x.matches
             if ($x.good) { $line += '  [Good tag]' }
             Write-Host $line -ForegroundColor $color
         }

@@ -169,6 +169,16 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
     if ($null -eq $hs -or $hs.matches -eq 0) { throw "No Street Brawl data for $($Hero.name)." }
     $base = $hs.wins / $hs.matches
     $rows = @($Snap.item_stats.street_brawl.$hid)
+    # Each tier's average win rate for this hero: late tiers sit well above or below the hero's
+    # overall average, so items are compared with others of the same tier.
+    $tierOf = @{}
+    foreach ($i in $Snap.items) { $tierOf[[string]$i.id] = [int]$i.tier }
+    $tw = @{}; $tm = @{}
+    foreach ($r in $rows) {
+        $t = $tierOf[[string]$r.id]
+        if ($null -eq $t) { continue }
+        $tw[$t] = [double]$tw[$t] + $r.w; $tm[$t] = [double]$tm[$t] + $r.m
+    }
     $notes = Get-Notes
     $heroNotes = $null
     if ($notes -and $notes.heroes) { $heroNotes = $notes.heroes.($Hero.name) }
@@ -176,7 +186,7 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
     $out = foreach ($it in $Items) {
         $r = Find-StatRow $rows $it.id
         $o = [ordered]@{
-            name = $it.name; tier = $it.tier; slot = $it.slot
+            name = $it.name; tier = $it.tier; slot = $it.slot; tierAvg = $null
             matches = 0; winrate = $null; delta = $null; score = -999; buyrate = $null; expected = $null; enhLift = $null
             good = $false; note = $null; reason = ''; verdict = ''; thin = $true
             enhanced = (@($Enhanced) -contains $it.name)
@@ -186,18 +196,22 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
         if ($bucket -and $bucket.b -eq 'Good') { $o.good = $true }
         if ($heroNotes) { $o.note = $heroNotes.($it.name) }
 
+        $tb = $base
+        $tk = [int]$it.tier
+        if ($tm[$tk] -gt 0) { $tb = $tw[$tk] / $tm[$tk] }
+        $o.tierAvg = 100.0 * $tb
         if ($r -and $r.m -gt 0) {
-            $adj = ($r.w + $script:PriorMatches * $base) / ($r.m + $script:PriorMatches)
+            $adj = ($r.w + $script:PriorMatches * $tb) / ($r.m + $script:PriorMatches)
             $o.matches = [int]$r.m
             $o.winrate = 100.0 * $r.w / $r.m
-            $o.delta = 100.0 * ($adj - $base)
+            $o.delta = 100.0 * ($adj - $tb)
             $o.score = $o.delta
             if ($o.enhanced) {
                 $el = Get-EnhancedLift $Snap $it $Hero.id
                 $o.enhLift = $el
                 if ($UseEnhancedBoost) { $o.score += $el.lift }
             }
-            $o.expected = 100.0 * $base + $o.score
+            $o.expected = 100.0 * $tb + $o.score
             $o.buyrate = 100.0 * $r.m / $hs.matches
             $o.thin = ($r.m -lt $script:ThinSample)
         }
@@ -212,11 +226,11 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
             $parts += "No Street Brawl data for $($Hero.name) with this item."
         } else {
             $d = $x.score
-            if ($d -ge 2) { $parts += ('Strong for {0}: {1:+0.0;-0.0;0.0} pts vs average.' -f $Hero.name, $d) }
-            elseif ($d -ge 0.5) { $parts += ('Above {0}''s average ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
-            elseif ($d -gt -0.5) { $parts += ('About average for {0} ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
-            elseif ($d -gt -2) { $parts += ('Below {0}''s average ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
-            else { $parts += ('Weak for {0}: {1:+0.0;-0.0;0.0} pts vs average.' -f $Hero.name, $d) }
+            if ($d -ge 2) { $parts += ('Strong for {0}: {1:+0.0;-0.0;0.0} pts vs its tier average.' -f $Hero.name, $d) }
+            elseif ($d -ge 0.5) { $parts += ('Above {0}''s tier average ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
+            elseif ($d -gt -0.5) { $parts += ('About tier average for {0} ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
+            elseif ($d -gt -2) { $parts += ('Below {0}''s tier average ({1:+0.0;-0.0;0.0} pts).' -f $Hero.name, $d) }
+            else { $parts += ('Weak for {0}: {1:+0.0;-0.0;0.0} pts vs its tier average.' -f $Hero.name, $d) }
         }
         $x.verdict = $parts[$parts.Count - 1]
         if ($x.enhanced -and $x.enhLift -and $UseEnhancedBoost) {
