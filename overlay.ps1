@@ -2,8 +2,9 @@
 # Detects your hero and the offered items from the screen, and ranks the items with Street Brawl stats.
 # Ctrl+Alt+D toggles click-through. Windows PowerShell 5.1, no downloads.
 
-param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left')
-# -Preview: visible to screenshots, screen reading off. -Demo: also show a sample offer (hero, items separated by |).
+param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left', [string]$DemoEnemies = '')
+# -Preview: visible to screenshots, screen reading off. -Demo: also show a sample offer (hero, items separated by |;
+# -DemoEnemies: enemy hero names separated by |).
 $ErrorActionPreference = 'Stop'
 trap { Add-Content -Path (Join-Path $PSScriptRoot 'overlay_error.log') -Value ((Get-Date).ToString('s') + ' ' + $_.Exception.Message) -Encoding UTF8; break }
 Add-Type -AssemblyName System.Windows.Forms
@@ -75,6 +76,7 @@ $LatestPath = Join-Path $PSScriptRoot 'data\latest.json'
 $DebugPath = Join-Path $PSScriptRoot 'data\screen_debug.txt'
 $ShopImagePath = Join-Path $PSScriptRoot 'data\last_shop.png'
 $IconDir = Join-Path $PSScriptRoot 'data\icons'
+$CardDir = Join-Path $PSScriptRoot 'data\hero_cards'
 $HistoryPath = Join-Path $PSScriptRoot 'data\pick_history.csv'
 
 $settings = Read-JsonFile $SettingsPath
@@ -88,6 +90,8 @@ $script:snapTime = $null
 $script:shop = @()
 $script:heroes = @()
 $script:templateCount = 0
+$script:cardCount = 0
+$script:itemNameById = @{}
 $script:gameBuild = ''
 function Load-Data {
     $script:snap = Get-Snapshot
@@ -95,7 +99,13 @@ function Load-Data {
     $script:shop = @(Get-ShopItems $script:snap | Sort-Object name)
     $script:heroes = @(Get-PlayableHeroes $script:snap)
     $script:heroTable = @(Get-HeroTable $script:snap)
-    if ($script:screenOk) { $script:templateCount = [ScreenReader]::LoadTemplates($IconDir) }
+    if ($script:screenOk) {
+        $script:templateCount = [ScreenReader]::LoadTemplates($IconDir)
+        $script:cardCount = [TopBar]::LoadCards($CardDir)
+    }
+    $script:portraitCache = @{}
+    $script:itemNameById = @{}
+    foreach ($i in $script:snap.items) { $script:itemNameById[[string]$i.id] = $i.name }
 }
 
 # Build number of the installed game (from its steam.inf), to compare with the stats build.
@@ -204,6 +214,73 @@ function Get-ItemIcon($Name) {
     return $bmp
 }
 
+# Hero portraits for the counter tags: the head from data\hero_cards\<id>.png, cached.
+$script:portraitCache = @{}
+function Get-HeroPortrait([string]$Id) {
+    if ($script:portraitCache.ContainsKey($Id)) { return $script:portraitCache[$Id] }
+    $bmp = $null
+    $p = Join-Path $CardDir ($Id + '.png')
+    if (Test-Path $p) {
+        try {
+            $bytes = [IO.File]::ReadAllBytes($p)
+            $ms = New-Object IO.MemoryStream(, $bytes)
+            $src = New-Object Drawing.Bitmap($ms)
+            $side = [int]($src.Width * 0.76)
+            $bmp = New-Object Drawing.Bitmap(64, 64)
+            $gg = [Drawing.Graphics]::FromImage($bmp)
+            $gg.InterpolationMode = 'HighQualityBicubic'
+            $gg.DrawImage($src, (New-Object Drawing.Rectangle(0, 0, 64, 64)), (New-Object Drawing.Rectangle([int]($src.Width * 0.12), [int]($src.Height * 0.02), $side, $side)), [Drawing.GraphicsUnit]::Pixel)
+            $gg.Dispose(); $src.Dispose(); $ms.Dispose()
+        } catch { $bmp = $null }
+    }
+    $script:portraitCache[$Id] = $bmp
+    return $bmp
+}
+
+function Draw-Portrait($g, [string]$Id, [float]$x, [float]$y, [float]$d, $RingColor) {
+    $g.FillEllipse((Get-Brush $colWell), $x, $y, $d, $d)
+    $pic = Get-HeroPortrait $Id
+    if ($pic) {
+        $clip = New-Object Drawing.Drawing2D.GraphicsPath
+        $clip.AddEllipse($x, $y, $d, $d)
+        $old = $g.Clip
+        $g.SetClip($clip)
+        $g.InterpolationMode = 'HighQualityBicubic'
+        $g.DrawImage($pic, $x, $y, $d, $d)
+        $g.Clip = $old
+        $clip.Dispose()
+    }
+    $pen = New-Object Drawing.Pen($RingColor, [float](S 1.2))
+    $g.DrawEllipse($pen, $x, $y, $d, $d)
+    $pen.Dispose()
+}
+
+# Counter tags under an item: enemy portrait + extra points, two per line. Returns the height used.
+function Draw-CounterTags($g, $Tags, [float]$left, [float]$colW, [float]$top, [bool]$Paint) {
+    $tags = @($Tags)
+    if ($tags.Count -eq 0) { return 0 }
+    $isz = [float](S 18); $pad = [float](S 3); $gap = [float](S 10)
+    $y = $top
+    for ($i = 0; $i -lt $tags.Count; $i += 2) {
+        $line = @($tags[$i..([Math]::Min($i + 1, $tags.Count - 1))])
+        $texts = @($line | ForEach-Object { '+{0:0.0}' -f $_.pp })
+        $ws = @($texts | ForEach-Object { $g.MeasureString($_, $fontSmall).Width })
+        $total = 0.0
+        for ($k = 0; $k -lt $line.Count; $k++) { $total += $isz + $pad + $ws[$k] }
+        $total += $gap * ($line.Count - 1)
+        $x = $left + ($colW - $total) / 2
+        if ($Paint) {
+            for ($k = 0; $k -lt $line.Count; $k++) {
+                Draw-Portrait $g $line[$k].hero ([float]$x) ([float]$y) $isz $colGreen
+                $g.DrawString($texts[$k], $fontSmall, (Get-Brush $colGreen), [float]($x + $isz + $pad - (S 1)), [float]($y + ($isz - $g.MeasureString($texts[$k], $fontSmall).Height) / 2))
+                $x += $isz + $pad + $ws[$k] + $gap
+            }
+        }
+        $y += $isz + (S 3)
+    }
+    return ($y - $top)
+}
+
 # ---------- window ----------
 $W = S 480
 $form = New-Object OverlayForm
@@ -267,6 +344,12 @@ $header.Add_Paint({
         $g.DrawString($stand, $fontTiny, (Get-Brush $colBrassDim), [float]($x0 + $tw + (S 8)), [float](S 14))
     } else {
         $g.DrawString($title, $fontHero, (Get-Brush $colText), (New-Object Drawing.RectangleF(0, (S 4), $hw, (S 30))), $sfc)
+    }
+    $en = @($script:enemyIds)
+    if ($en.Count -gt 0) {
+        $g.DrawString('vs', $fontTiny, (Get-Brush $colBrassDim), [float](S 2), [float](S 5))
+        $px = [float](S 20)
+        foreach ($eid in $en) { Draw-Portrait $g $eid $px ([float](S 4)) ([float](S 16)) $colRing; $px += [float](S 19) }
     }
     $sub = $script:subtitle
     if ($sub) {
@@ -441,6 +524,8 @@ function Draw-ItemColumn($g, $x, [int]$Rank, [float]$left, [float]$colW, [float]
     if ($null -ne $x.score -and $x.score -le -0.5) { $vc = $colRed }
     $y += (Draw-CenteredText $g $line2 $fontSmall $vc $left $y $colW $Paint)
     if ($marks.Count -gt 0) { $y += (Draw-CenteredText $g ($marks -join '   ') $fontSmall $colBrass $left $y $colW $Paint) }
+    $ct = @(Get-CounterTags $script:snap $x.id $script:enemyIds)
+    if ($ct.Count -gt 0) { $y += (S 3); $y += (Draw-CounterTags $g $ct $left $colW $y $Paint) }
     if ($script:tooltipStats.ContainsKey($x.name)) {
         $y += (S 4)
         $y += (Draw-CenteredText $g ($script:tooltipStats[$x.name] -join "`n") $fontSmall $colText2 $left $y $colW $Paint)
@@ -561,6 +646,32 @@ function Draw-Stats($g, [int]$Width, [bool]$Paint) {
     }
     if ($ps -and $ps.pending -gt 0) {
         $y += (Draw-CenteredText $g ('{0} match(es) not on the stats site yet; their picks come from the overlay''s own reading.' -f $ps.pending) $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 6)
+    }
+    $y += (S 6)
+    $y += Draw-SectionTitle $g 'Counter items vs this enemy team' $y $Width $Paint
+    $en = @($script:enemyIds)
+    if ($en.Count -eq 0) {
+        $y += (Draw-CenteredText $g 'Enemy team not read yet (needs your hero and the portraits at the top of the screen).' $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 6)
+    } else {
+        foreach ($eid in $en) {
+            $list = @()
+            $c = $null
+            if ($script:snap.counters) { $c = $script:snap.counters.([string]$eid) }
+            if ($c) {
+                $list = @($c.PSObject.Properties | ForEach-Object { [pscustomobject]@{ name = $script:itemNameById[$_.Name]; pp = [double]$_.Value.pp } } | Where-Object { $_.name } | Sort-Object pp -Descending | Select-Object -First 5)
+            }
+            $txt = 'no counter items'
+            if ($list.Count -gt 0) { $txt = (@($list | ForEach-Object { '{0} +{1:0.0}' -f $_.name, $_.pp }) -join ',  ') }
+            $tx = [float](S 24)
+            $th = $g.MeasureString($txt, $fontSmall, [int]($Width - $tx)).Height
+            if ($Paint) {
+                Draw-Portrait $g ([string]$eid) ([float]0) ([float]$y) ([float](S 18)) $colGreen
+                $tc = $colText2
+                if ($list.Count -eq 0) { $tc = $colBrassDim }
+                $g.DrawString($txt, $fontSmall, (Get-Brush $tc), (New-Object Drawing.RectangleF($tx, [float]($y + (S 1)), [float]($Width - $tx), [float]($th + 2))))
+            }
+            $y += [Math]::Max([float](S 20), [float]($th + (S 4)))
+        }
     }
     $y += (S 6)
     $y += Draw-SectionTitle $g 'Hero tier list' $y $Width $Paint
@@ -796,6 +907,7 @@ function Update-MatchState([string]$Round, [string]$HeroName) {
         foreach ($e in $script:entries) { Write-Entry $e 'no pick seen' }
         $script:entries.Clear()
         $script:match = @{ id = $now.ToString('yyyy-MM-dd HH:mm'); lastRound = 0; hero = $HeroName; last = $now }
+        Reset-TopBar
         $m = $script:match
     }
     if ($Round) { $m.lastRound = [int]$Round }
@@ -863,6 +975,50 @@ function Get-HeroName([string]$Id) {
     foreach ($h in $script:heroes) { if ([string]$h.id -eq $Id) { return $h.name } }
     return "id $Id"
 }
+# Hero portraits along the top of the screen: 4 per team. A slot keeps the last confident read (dead or
+# hidden portraits read badly), and the side holding your own hero is your team.
+$script:topSlots = @('', '', '', '', '', '', '', '')
+$script:mySide = ''
+$script:enemyIds = @()
+$script:enemyKey = ''
+$script:topInfo = 'not read yet'
+function Reset-TopBar {
+    $script:topSlots = @('', '', '', '', '', '', '', '')
+    $script:mySide = ''
+}
+function Update-Enemies {
+    $me = ''
+    $h = Get-SelectedHero
+    if ($h) { $me = [string]$h.id }
+    $left = @($script:topSlots[0..3] | Where-Object { $_ })
+    $right = @($script:topSlots[4..7] | Where-Object { $_ })
+    if ($me) {
+        if ($left -contains $me) { $script:mySide = 'L' } elseif ($right -contains $me) { $script:mySide = 'R' }
+    }
+    $en = @()
+    if ($script:mySide -eq 'L') { $en = $right } elseif ($script:mySide -eq 'R') { $en = $left }
+    $en = @($en | Where-Object { $_ -ne $me })
+    $key = (@($en | Sort-Object) -join ',')
+    if ($key -ne $script:enemyKey) { $script:enemyKey = $key; $script:enemyIds = $en; return $true }
+    return $false
+}
+function Read-TopBar($Bmp) {
+    $slots = [TopBar]::Read($Bmp)
+    $parts = @()
+    for ($k = 0; $k -lt $slots.Count; $k++) {
+        $s = $slots[$k]
+        if ($s.Score -ge 0.6 -and ($s.Score - $s.Second) -ge 0.15) {
+            for ($j = 0; $j -lt 8; $j++) { if ($j -ne $k -and $script:topSlots[$j] -eq $s.HeroId) { $script:topSlots[$j] = '' } }
+            $script:topSlots[$k] = $s.HeroId
+            $parts += ('{0} {1:0.00}' -f (Get-HeroName $s.HeroId), $s.Score)
+        } else { $parts += ('? {0:0.00}' -f $s.Score) }
+        if ($k -eq 3) { $parts += '|' }
+    }
+    $changed = Update-Enemies
+    $en = @($script:enemyIds | ForEach-Object { Get-HeroName $_ })
+    $script:topInfo = ($parts -join ', ') + '   enemies: ' + ($en -join ', ')
+    return $changed
+}
 function Invoke-ScreenTick {
     if (-not $settings.auto -or -not $script:screenOk) { return }
     $script:tick++
@@ -889,6 +1045,11 @@ function Invoke-ScreenTick {
             }
         }
         $log += ('hero: ' + $script:lastHeroInfo)
+        # Enemy heroes: every tick while the shop is up, every other tick until all 4 are known.
+        if ($script:cardCount -gt 0 -and ($script:shopVisible -or ($script:enemyIds.Count -lt 4 -and $script:tick % 2 -eq 0))) {
+            if (Read-TopBar $bmp) { $header.Invalidate(); if ($script:view.kind -eq 'rank' -or $script:view.kind -eq 'stats') { Update-View }; $changed = $true }
+        }
+        $log += ('top bar: ' + $script:topInfo)
         $r = Read-Shop $bmp $script:shop $null
         $read = @($r.items | ForEach-Object { $_.name })
         for ($q = 0; $q -lt $read.Count; $q++) { if ($q -lt @($r.xs).Count) { $script:offerX[$read[$q]] = [double]$r.xs[$q] } }
@@ -1033,6 +1194,7 @@ $form.Add_Shown({
             if ($idx -ge 0) { $heroBox.SelectedIndex = $idx }
             $script:enhancedNames = @($DemoEnhanced -split '\|' | Where-Object { $_ })
             $script:rareNames = @($DemoRare -split '\|' | Where-Object { $_ })
+            $script:enemyIds = @($DemoEnemies -split '\|' | Where-Object { $_ } | ForEach-Object { $n = $_; @($script:heroes | Where-Object { $_.name -eq $n } | ForEach-Object { [string]$_.id }) })
             $di = @($DemoItems -split '\|')
             for ($k = 0; $k -lt 3; $k++) { if ($k -lt $di.Count) { $itemBoxes[$k].Text = $di[$k] } else { $itemBoxes[$k].Text = '' } }
             Invoke-Rank

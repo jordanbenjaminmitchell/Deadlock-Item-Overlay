@@ -1,5 +1,6 @@
-# Screen reading for the overlay: hero detection (ability icon matching) and shop item names
-# (Windows built-in text recognition). Reads pixels only: no game memory, no injection.
+# Screen reading for the overlay: hero detection (ability icon matching), the hero portraits along the
+# top of the screen (card art matching), and shop item names (Windows built-in text recognition).
+# Reads pixels only: no game memory, no injection.
 # Windows PowerShell 5.1, no downloads.
 
 Add-Type -AssemblyName System.Drawing
@@ -205,6 +206,119 @@ public static class ScreenReader {
             else if (total > m.Second) { m.Second = total; m.SecondId = kv.Key; }
         }
         return m;
+    }
+}
+
+public class TopBarSlot {
+    public string HeroId = ""; public double Score; public string SecondId = ""; public double Second;
+}
+
+// Reads the 8 hero portraits along the top of the screen (4 per team) by matching their outlines
+// against each hero's card art. Portrait geometry is measured in a 1080-pixel-tall frame.
+public static class TopBar {
+    const int N = 32, M = 43;                 // feature grid: card art (70x95) shrunk to 32x43
+    const int R0 = 3, R1 = 26, C0 = 6, C1 = 26; // face window: skips the danger bar edges and lower body
+    public static readonly double[] Offsets = { -402, -323, -234, -146, 145, 233, 320, 408 };
+    const double CardW = 70, CardH = 95;
+    static Dictionary<string, float[]> cards = new Dictionary<string, float[]>();
+
+    static float[] Gray(Bitmap b, Rectangle r, bool alphaOnBg) {
+        // Area-average shrink of region r to N x M, grayscale. Transparent pixels sit on a dark blue-gray.
+        r.Intersect(new Rectangle(0, 0, b.Width, b.Height));
+        float[] g = new float[N * M];
+        if (r.Width < 2 || r.Height < 2) return g;
+        BitmapData d = b.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        byte[] px = new byte[d.Stride * r.Height];
+        Marshal.Copy(d.Scan0, px, 0, px.Length);
+        b.UnlockBits(d);
+        double[] sum = new double[N * M]; double[] cnt = new double[N * M];
+        for (int y = 0; y < r.Height; y++) {
+            double fy0 = (double)y * M / r.Height, fy1 = (double)(y + 1) * M / r.Height;
+            for (int x = 0; x < r.Width; x++) {
+                int i = y * d.Stride + x * 4;
+                double a = alphaOnBg ? px[i + 3] / 255.0 : 1.0;
+                double bl = px[i] * a + 110 * (1 - a), gr = px[i + 1] * a + 90 * (1 - a), rd = px[i + 2] * a + 80 * (1 - a);
+                double v = (0.114 * bl + 0.587 * gr + 0.299 * rd) / 255.0;
+                double fx0 = (double)x * N / r.Width, fx1 = (double)(x + 1) * N / r.Width;
+                for (int gy = (int)fy0; gy < M && gy < fy1; gy++) {
+                    double wy = Math.Min(fy1, gy + 1) - Math.Max(fy0, gy);
+                    if (wy <= 0) continue;
+                    for (int gx = (int)fx0; gx < N && gx < fx1; gx++) {
+                        double wx = Math.Min(fx1, gx + 1) - Math.Max(fx0, gx);
+                        if (wx <= 0) continue;
+                        sum[gy * N + gx] += v * wx * wy; cnt[gy * N + gx] += wx * wy;
+                    }
+                }
+            }
+        }
+        for (int k = 0; k < N * M; k++) g[k] = cnt[k] > 0 ? (float)(sum[k] / cnt[k]) : 0f;
+        return g;
+    }
+
+    static float[] Feature(float[] g) {
+        int n = (R1 - R0) * (C1 - C0);
+        float[] e = new float[n];
+        int k = 0; double mean = 0;
+        for (int y = R0; y < R1; y++) for (int x = C0; x < C1; x++) {
+            Func<int, int, float> p = (yy, xx) => g[yy * N + xx];
+            float gx = (p(y - 1, x + 1) + 2 * p(y, x + 1) + p(y + 1, x + 1)) - (p(y - 1, x - 1) + 2 * p(y, x - 1) + p(y + 1, x - 1));
+            float gy = (p(y + 1, x - 1) + 2 * p(y + 1, x) + p(y + 1, x + 1)) - (p(y - 1, x - 1) + 2 * p(y - 1, x) + p(y - 1, x + 1));
+            e[k] = (float)Math.Sqrt(gx * gx + gy * gy); mean += e[k]; k++;
+        }
+        mean /= n;
+        double norm = 0;
+        for (int i = 0; i < n; i++) { e[i] = (float)(e[i] - mean); norm += e[i] * e[i]; }
+        norm = Math.Sqrt(norm);
+        if (norm > 0) for (int i = 0; i < n; i++) e[i] = (float)(e[i] / norm);
+        return e;
+    }
+
+    // Card files are named <heroId>.png
+    public static int LoadCards(string dir) {
+        cards.Clear();
+        if (!Directory.Exists(dir)) return 0;
+        foreach (string f in Directory.GetFiles(dir, "*.png")) {
+            string id = Path.GetFileNameWithoutExtension(f);
+            int tmp; if (!int.TryParse(id, out tmp)) continue;
+            try {
+                using (Bitmap src = new Bitmap(f))
+                using (Bitmap b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb)) {
+                    using (Graphics gg = Graphics.FromImage(b)) { gg.Clear(Color.Transparent); gg.DrawImage(src, 0, 0, src.Width, src.Height); }
+                    cards[id] = Feature(Gray(b, new Rectangle(0, 0, b.Width, b.Height), true));
+                }
+            } catch { }
+        }
+        return cards.Count;
+    }
+
+    public static TopBarSlot[] Read(Bitmap screen) {
+        TopBarSlot[] res = new TopBarSlot[Offsets.Length];
+        double unit = screen.Height / 1080.0;
+        using (Bitmap s32 = new Bitmap(screen.Width, (int)Math.Min(screen.Height, 140 * unit + 10), PixelFormat.Format32bppArgb)) {
+            using (Graphics g = Graphics.FromImage(s32)) g.DrawImage(screen, new Rectangle(0, 0, s32.Width, s32.Height), new Rectangle(0, 0, s32.Width, s32.Height), GraphicsUnit.Pixel);
+            for (int k = 0; k < Offsets.Length; k++) {
+                TopBarSlot m = new TopBarSlot();
+                res[k] = m;
+                if (cards.Count == 0) continue;
+                Dictionary<string, double> best = new Dictionary<string, double>();
+                double cx = screen.Width / 2.0 + Offsets[k] * unit;
+                for (int dx = -6; dx <= 6; dx += 2) for (int dy = 0; dy <= 4; dy += 2) {
+                    Rectangle rc = new Rectangle((int)Math.Round(cx - CardW / 2 * unit + dx * unit), (int)Math.Round(dy * unit), (int)Math.Round(CardW * unit), (int)Math.Round(CardH * unit));
+                    float[] v = Feature(Gray(s32, rc, false));
+                    foreach (KeyValuePair<string, float[]> kv in cards) {
+                        double dot = 0; float[] t = kv.Value;
+                        for (int i = 0; i < t.Length; i++) dot += t[i] * v[i];
+                        double old;
+                        if (!best.TryGetValue(kv.Key, out old) || dot > old) best[kv.Key] = dot;
+                    }
+                }
+                foreach (KeyValuePair<string, double> kv in best) {
+                    if (kv.Value > m.Score) { m.Second = m.Score; m.SecondId = m.HeroId; m.Score = kv.Value; m.HeroId = kv.Key; }
+                    else if (kv.Value > m.Second) { m.Second = kv.Value; m.SecondId = kv.Key; }
+                }
+            }
+        }
+        return res;
     }
 }
 '@

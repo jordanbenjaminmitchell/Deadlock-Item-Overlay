@@ -55,6 +55,13 @@ Each run saves `data\<date>\snapshot.json`, updates `data\latest.json`, and writ
 - Data window: since the last big patch, at most 30 days back. Enhanced data comes from the public data lake (falls back to the last 3 days, or the previous refresh, if the long window fails).
 - `notes.json`: your own one-line notes per hero and item, shown after the stats.
 
+## Counter tags (enemy heroes)
+- The overlay reads the 8 hero portraits along the top of the screen (matched against each hero's card art), finds your own hero among them, and treats the other 4 as the enemy team. A portrait that is dead, flashing or covered is skipped until it reads clearly, and the last clear read is kept for the match.
+- Under an item, a small enemy portrait with a green number (for example "+0.9") means that item wins that many extra points when that hero is on the enemy team, on top of its usual result vs its tier average. Nothing shows when no enemy has a counter for that item.
+- How it is measured (tier 1 to 4 items only, all buyers pooled because single-hero samples are too small): for each enemy hero, the item's points vs its tier average in games against that hero, minus the same in games without that hero. Error bars are widened by 1.5x for teammates who share a result.
+- What qualifies: 99% sure the extra is above 0, and at least +0.3 points after the estimate is pulled toward 0 (empirical Bayes, using the spread of all tests). The shown number is that pulled-in estimate. At most 3 items per tier per enemy. With about 6,800 enemy and item pairs tested, roughly 1 tag in 5 can still be chance, so treat a tag as a nudge, not a rule.
+- Recomputed by every daily refresh. A few heroes have no counter items at all; real counter effects in Street Brawl are usually under 1 point.
+
 ## Limits
 - Win rate with an item is not proof the item caused the win; it is the best public signal.
 - The overlay only reads public stats and your screen. No game memory reading, no injection, no input to the game.

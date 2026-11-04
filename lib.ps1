@@ -163,6 +163,21 @@ function Get-EnhancedLift($Snap, $Item, $HeroId) {
     return [pscustomobject]@{ lift = [Math]::Max(0.0, $lift); raw = $raw; n = $n; prior = $prior; heroRaw = $heroRaw; heroN = $heroN }
 }
 
+# Counter tags for one item: enemy heroes on the screen that this item does extra well against
+# (from the daily refresh; tier 1-4 only, significant after correction). Best first.
+function Get-CounterTags($Snap, [string]$ItemId, $EnemyIds) {
+    $out = @()
+    if (-not $Snap.counters -or -not $ItemId) { return $out }
+    foreach ($e in @($EnemyIds)) {
+        if (-not $e) { continue }
+        $c = $Snap.counters.([string]$e)
+        if (-not $c) { continue }
+        $v = $c.$ItemId
+        if ($v) { $out += [pscustomobject]@{ hero = [string]$e; pp = [double]$v.pp } }
+    }
+    return @($out | Sort-Object pp -Descending)
+}
+
 function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhancedBoost = $true) {
     $hid = [string]$Hero.id
     $hs = $Snap.hero_stats.street_brawl.$hid
@@ -186,7 +201,7 @@ function Get-ItemRanking($Snap, $Hero, $Items, $Enhanced = @(), [bool]$UseEnhanc
     $out = foreach ($it in $Items) {
         $r = Find-StatRow $rows $it.id
         $o = [ordered]@{
-            name = $it.name; tier = $it.tier; slot = $it.slot; tierAvg = $null
+            id = [string]$it.id; name = $it.name; tier = $it.tier; slot = $it.slot; tierAvg = $null
             matches = 0; winrate = $null; delta = $null; score = -999; buyrate = $null; expected = $null; enhLift = $null
             good = $false; note = $null; reason = ''; verdict = ''; thin = $true
             enhanced = (@($Enhanced) -contains $it.name)

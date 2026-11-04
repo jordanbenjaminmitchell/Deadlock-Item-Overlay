@@ -157,6 +157,31 @@ try {
     $im | ConvertTo-Json | Set-Content -Path $imPath -Encoding UTF8
     Write-Log ('  item icons: {0} downloaded, {1} failed' -f $itNew, $itFail)
 
+    # Hero card art (for reading the hero portraits along the top of the screen, and for the counter icons).
+    $cardDir = Join-Path $DataDir 'hero_cards'
+    New-Item -ItemType Directory -Force -Path $cardDir | Out-Null
+    $cmPath = Join-Path $cardDir 'cards.json'
+    $cm = @{}
+    if (Test-Path $cmPath) {
+        $cmj = Get-Content $cmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($p in $cmj.PSObject.Properties) { $cm[$p.Name] = [string]$p.Value }
+    }
+    $cardNew = 0; $cardFail = 0
+    foreach ($h in $heroesRaw) {
+        if (-not ([bool]$h.player_selectable -and -not [bool]$h.disabled)) { continue }
+        $url = [string]$h.images.icon_hero_card
+        if (-not $url) { continue }
+        $file = [string]$h.id + '.png'
+        $path = Join-Path $cardDir $file
+        if ((Test-Path $path) -and $cm[$file] -eq $url) { continue }
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing -TimeoutSec 60 -UserAgent 'DeadlockItemOverlay/0.1 (personal use)'
+            $cm[$file] = $url; $cardNew++
+        } catch { $cardFail++ }
+    }
+    $cm | ConvertTo-Json | Set-Content -Path $cmPath -Encoding UTF8
+    Write-Log ('  hero cards: {0} downloaded, {1} failed' -f $cardNew, $cardFail)
+
     $heroesRaw = $null
     $playable = @($heroes | Where-Object { $_.selectable })
     Write-Log ('  heroes: {0} playable' -f $playable.Count)
@@ -193,7 +218,9 @@ try {
         $ts = $t.ToString('yyyy-MM-dd HH:mm:ss')
         $q = "SELECT hero_id h, i, u, count(*) n, sum(CASE WHEN team = winning_team THEN 1 ELSE 0 END) w FROM (SELECT hero_id, team, winning_team, unnest(""items.item_id"") i, unnest(""items.upgrade_info"") u FROM match_player WHERE game_mode='StreetBrawl' AND start_time > TIMESTAMP '$ts+00') WHERE i IN ($idList) GROUP BY 1,2,3"
         try {
-            $rowsE = @(Invoke-RestMethod -Uri ($Api + '/v1/sql?query=' + [uri]::EscapeDataString($q)) -TimeoutSec 120 -UserAgent 'DeadlockItemOverlay/0.1 (personal use)')
+            # Windows PowerShell 5.1 returns a JSON array as one object; assign first so @() does not nest it.
+            $resE = Invoke-RestMethod -Uri ($Api + '/v1/sql?query=' + [uri]::EscapeDataString($q)) -TimeoutSec 120 -UserAgent 'DeadlockItemOverlay/0.1 (personal use)'
+            $rowsE = @($resE)
             if ($rowsE.Count -gt 0 -and $null -ne $rowsE[0].i) {
                 $enhanced = [ordered]@{}
                 $enhancedHero = [ordered]@{}
@@ -223,9 +250,96 @@ try {
         }
     } else { Write-Log ('  enhanced stats: {0} items (since {1})' -f $enhanced.Count, $enhSince) }
 
+    # ---- Counter items: tier 1-4 items that win extra when a given hero is on the enemy team ----
+    # All buyers pooled (per-hero samples are too small). For enemy E and item i:
+    #   extra = (item win% - tier avg) in games vs E  minus  (item win% - tier avg) in games without E.
+    # Error bars widened by $CounterVif for teammates sharing a result. Kept when 99% sure it is above 0
+    # (one-sided p < $CounterP; with about 6,800 tests roughly 1 tag in 5 can still be chance) and when the
+    # estimate pulled toward 0 (empirical Bayes, prior spread fitted from all tests) is at least
+    # $CounterMinPp points. Top 3 per tier per enemy.
+    $CounterVif = 1.5; $CounterP = 0.01; $CounterMinPp = 0.3; $CounterMinN = 1000; $CounterTop = 3
+    $counters = $null; $counterMeta = $null
+    function Get-NormalUpper([double]$z) {
+        # P(Z > z), Abramowitz and Stegun 7.1.26 (error below 1e-7)
+        $ax = [Math]::Abs($z) / [Math]::Sqrt(2.0)
+        $tt = 1.0 / (1.0 + 0.3275911 * $ax)
+        $erfc = $tt * (0.254829592 + $tt * (-0.284496736 + $tt * (1.421413741 + $tt * (-1.453152027 + $tt * 1.061405429)))) * [Math]::Exp(-$ax * $ax)
+        if ($z -ge 0) { return 0.5 * $erfc } else { return 1.0 - 0.5 * $erfc }
+    }
+    try {
+        $tierOf = @{}
+        foreach ($i in $items) { $tierOf[[string]$i.id] = [int]$i.tier }
+        $A = @{}
+        foreach ($r in @(Get-Api "/v1/analytics/item-stats?game_mode=street_brawl&min_unix_timestamp=$sinceUnix")) { $A[[string]$r.item_id] = $r }
+        $tests = New-Object System.Collections.Generic.List[object]
+        foreach ($h in $playable) {
+            Start-Sleep -Milliseconds 350
+            $V = @{}
+            foreach ($r in @(Get-Api "/v1/analytics/item-stats?game_mode=street_brawl&enemy_hero_ids=$($h.id)&min_unix_timestamp=$sinceUnix")) { $V[[string]$r.item_id] = $r }
+            for ($tier = 1; $tier -le 4; $tier++) {
+                $ids = @($V.Keys | Where-Object { $A.ContainsKey($_) -and $tierOf.ContainsKey($_) -and $tierOf[$_] -eq $tier })
+                if ($ids.Count -eq 0) { continue }
+                $vsWinT = 0.0; $vsGamesT = 0.0; $otWinT = 0.0; $otGamesT = 0.0
+                foreach ($id in $ids) {
+                    $vsWinT += [double]$V[$id].wins; $vsGamesT += [double]$V[$id].matches
+                    $otWinT += [double]$A[$id].wins - [double]$V[$id].wins; $otGamesT += [double]$A[$id].matches - [double]$V[$id].matches
+                }
+                if ($vsGamesT -le 0 -or $otGamesT -le 0) { continue }
+                $tierVs = $vsWinT / $vsGamesT; $tierOt = $otWinT / $otGamesT
+                foreach ($id in $ids) {
+                    $vsWin = [double]$V[$id].wins; $vsGames = [double]$V[$id].matches
+                    $otWin = [double]$A[$id].wins - $vsWin; $otGames = [double]$A[$id].matches - $vsGames
+                    if ($vsGames -lt $CounterMinN -or $otGames -lt $CounterMinN) { continue }
+                    $rateVs = $vsWin / $vsGames; $rateOt = $otWin / $otGames
+                    $extra = ($rateVs - $tierVs) - ($rateOt - $tierOt)
+                    $se = [Math]::Sqrt($CounterVif * ($rateVs * (1 - $rateVs) / $vsGames + $rateOt * (1 - $rateOt) / $otGames))
+                    if ($se -le 0) { continue }
+                    $tests.Add([pscustomobject]@{ e = [string]$h.id; id = $id; tier = $tier; d = $extra; se = $se; n = [long]$vsGames; p = (Get-NormalUpper ($extra / $se)); post = 0.0 })
+                }
+            }
+        }
+        if ($tests.Count -lt 100) { throw "only $($tests.Count) counter tests" }
+        # Spread of true effects = observed spread minus the average sampling noise.
+        $sumD = 0.0; $sumD2 = 0.0; $sumSe2 = 0.0
+        foreach ($t in $tests) { $sumD += $t.d; $sumD2 += $t.d * $t.d; $sumSe2 += $t.se * $t.se }
+        $meanD = $sumD / $tests.Count
+        $tau2 = [Math]::Max(0.0, ($sumD2 / $tests.Count - $meanD * $meanD) - $sumSe2 / $tests.Count)
+        foreach ($t in $tests) { $t.post = $t.d * $tau2 / ($tau2 + $t.se * $t.se) }
+        $m = $tests.Count; $kmax = 0
+        $keep = @{}
+        foreach ($t in $tests) {
+            if ($t.p -ge $CounterP) { continue }
+            $kmax++
+            if (100.0 * $t.post -lt $CounterMinPp) { continue }
+            $key = $t.e + '|' + $t.tier
+            if (-not $keep.ContainsKey($key)) { $keep[$key] = New-Object System.Collections.Generic.List[object] }
+            $keep[$key].Add($t)
+        }
+        $counters = [ordered]@{}
+        $tagCount = 0
+        foreach ($key in $keep.Keys) {
+            foreach ($t in @($keep[$key] | Sort-Object post -Descending | Select-Object -First $CounterTop)) {
+                if (-not $counters.Contains($t.e)) { $counters[$t.e] = [ordered]@{} }
+                $counters[$t.e][$t.id] = [ordered]@{ pp = [Math]::Round(100.0 * $t.post, 2); raw = [Math]::Round(100.0 * $t.d, 2); se = [Math]::Round(100.0 * $t.se, 2); n = $t.n }
+                $tagCount++
+            }
+        }
+        $counterMeta = [ordered]@{ since = $since.ToString('yyyy-MM-dd'); tests = $m; significant = $kmax; tags = $tagCount; tau = [Math]::Round(100.0 * [Math]::Sqrt($tau2), 3); vif = $CounterVif; p = $CounterP; min_pp = $CounterMinPp }
+        Write-Log ('  counter items: {0} tags for {1} enemy heroes ({2} tests, {3} significant)' -f $tagCount, $counters.Count, $m, $kmax)
+    } catch {
+        Write-Log ('  counter items failed: ' + $_.Exception.Message)
+        $prevLatest = Join-Path $DataDir 'latest.json'
+        if (Test-Path $prevLatest) {
+            try {
+                $pl = Get-Content $prevLatest -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($pl.counters) { $counters = $pl.counters; $counterMeta = $pl.counter_meta; Write-Log '  kept counter items from the previous refresh' }
+            } catch { }
+        }
+    }
+
     $snap = [ordered]@{
         date = $Today; collected_at = (Get-Date).ToString('s'); build = $build; since = $since.ToString('yyyy-MM-dd'); last_patch = $patchNote
-        source = $Api; enhanced = $enhanced; enhanced_hero = $enhancedHero; enhanced_since = $enhSince; items = $items; heroes = $heroes; hero_stats = $heroStats; item_stats = $itemStats
+        source = $Api; enhanced = $enhanced; enhanced_hero = $enhancedHero; enhanced_since = $enhSince; counters = $counters; counter_meta = $counterMeta; items = $items; heroes = $heroes; hero_stats = $heroStats; item_stats = $itemStats
     }
     $json = $snap | ConvertTo-Json -Depth 10 -Compress
     $snapPath = Join-Path $DayDir 'snapshot.json'
