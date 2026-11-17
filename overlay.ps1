@@ -1,6 +1,6 @@
 # Street Brawl item overlay window.
 # Detects your hero and the offered items from the screen, and ranks the items with Street Brawl stats.
-# Ctrl+Alt+D toggles click-through. Windows PowerShell 5.1, no downloads.
+# Ctrl+Alt+D toggles click-through. Ctrl+Alt+R re-detects the hero and enemy team. Windows PowerShell 5.1, no downloads.
 
 param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left', [string]$DemoEnemies = '')
 # -Preview: visible to screenshots, screen reading off. -Demo: also show a sample offer (hero, items separated by |;
@@ -45,9 +45,10 @@ public class OverlayForm : Form {
         RegisterHotKey(this.Handle, 2, 0x0001 | 0x0002 | 0x4000, (uint)Keys.S);
         RegisterHotKey(this.Handle, 3, 0x0001 | 0x0002 | 0x4000, (uint)Keys.E);
         RegisterHotKey(this.Handle, 4, 0x0001 | 0x0002 | 0x4000, (uint)Keys.T);
+        RegisterHotKey(this.Handle, 5, 0x0001 | 0x0002 | 0x4000, (uint)Keys.R);
         try { int round = 2; DwmSetWindowAttribute(this.Handle, 33, ref round, 4); } catch { }
     }
-    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); UnregisterHotKey(this.Handle, 4); base.OnHandleDestroyed(e); }
+    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); UnregisterHotKey(this.Handle, 4); UnregisterHotKey(this.Handle, 5); base.OnHandleDestroyed(e); }
     protected override void WndProc(ref Message m) {
         if (m.Msg == WM_HOTKEY && HotkeyPressed != null) { LastHotkey = (int)m.WParam; HotkeyPressed(this, EventArgs.Empty); }
         base.WndProc(ref m);
@@ -382,6 +383,63 @@ $closeBtn = New-IconButton ([string][char]0xE8BB)
 $closeBtn.SetBounds(($header.Width - (S 28)), (S 2), (S 26), (S 24))
 $closeBtn.Add_Click({ $form.Close() })
 $header.Controls.Add($closeBtn)
+$redetectBtn = New-IconButton ([string][char]0xE72C)
+$redetectBtn.SetBounds(($header.Width - (S 112)), (S 2), (S 26), (S 24))
+$header.Controls.Add($redetectBtn)
+
+# When the item numbers were collected, under the buttons. Click it to run a data refresh in the background.
+$dataLbl = New-Object Windows.Forms.Label
+$dataLbl.AutoSize = $true
+$dataLbl.Font = $fontTiny
+$dataLbl.BackColor = $colBg
+$dataLbl.ForeColor = $colBrassDim
+$dataLbl.Cursor = [Windows.Forms.Cursors]::Hand
+$header.Controls.Add($dataLbl)
+$script:collectProc = $null
+function Get-DataAgeText {
+    $t = $null
+    try { if ($script:snap.collected_at) { $t = [datetime]::Parse([string]$script:snap.collected_at) } } catch { }
+    if (-not $t) { $t = $script:snapTime }
+    if (-not $t) { return @('no data', $true) }
+    $today = (Get-Date).Date
+    $clock = $t.ToString('h:mm tt').ToLower()
+    if ($t.Date -eq $today) { $when = 'today ' + $clock }
+    elseif ($t.Date -eq $today.AddDays(-1)) { $when = 'yesterday ' + $clock }
+    else { $when = $t.ToString('MMM d') }
+    $stale = ((Get-Date) - $t).TotalHours -gt 24
+    $txt = 'data ' + $when
+    if ($script:snap.build -and $script:gameBuild -and [string]$script:snap.build -ne [string]$script:gameBuild) { $txt += ', new game build'; $stale = $true }
+    return @($txt, $stale)
+}
+function Update-DataLabel {
+    if ($script:collectProc -and -not $script:collectProc.HasExited) {
+        $dataLbl.Text = 'refreshing data...'
+        $dataLbl.ForeColor = $colBrass
+    } else {
+        $r = Get-DataAgeText
+        $dataLbl.Text = $r[0]
+        if ($r[1]) { $dataLbl.ForeColor = $colBrass } else { $dataLbl.ForeColor = $colBrassDim }
+    }
+    $dataLbl.Location = New-Object Drawing.Point(($header.Width - $dataLbl.PreferredWidth - (S 2)), (S 24))
+}
+$collectTimer = New-Object Windows.Forms.Timer
+$collectTimer.Interval = 2000
+$collectTimer.Add_Tick({
+    if ($script:collectProc -and $script:collectProc.HasExited) {
+        $collectTimer.Stop()
+        $script:collectProc = $null
+        try { if ((Test-Path $LatestPath) -and (Get-Item $LatestPath).LastWriteTime -ne $script:snapTime) { Load-Data; Fill-Lists; Invoke-Rank } } catch { }
+        Update-DataLabel
+    }
+})
+$dataLbl.Add_Click({
+    if ($script:collectProc -and -not $script:collectProc.HasExited) { return }
+    try {
+        $script:collectProc = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'collect.ps1') + '"'))
+        $collectTimer.Start()
+    } catch { Set-Status ('Could not start the refresh: ' + $_.Exception.Message) $colRed }
+    Update-DataLabel
+})
 
 # Manual controls, hidden until the edit button is pressed.
 $manual = New-Object Windows.Forms.Panel
@@ -729,6 +787,7 @@ function Switch-Stats {
     }
 }
 $statsBtn.Add_Click({ Switch-Stats })
+$redetectBtn.Add_Click({ Reset-Detection })
 
 $cards.Add_Paint({ param($s, $e) [void](Draw-View $e.Graphics $cards.Width $true) })
 
@@ -842,6 +901,7 @@ $clearBtn.Add_Click({ $script:offer = @(); $script:offerChoice = ''; $script:enh
 $form.Add_HotkeyPressed({
     if ($form.LastHotkey -eq 3) { Switch-Boost; return }
     if ($form.LastHotkey -eq 4) { Switch-Stats; return }
+    if ($form.LastHotkey -eq 5) { Reset-Detection; return }
     if ($form.LastHotkey -eq 2) {
         # Ctrl+Alt+S: pin the window visible outside the item phase (or unpin).
         $script:pinned = -not $script:pinned
@@ -978,12 +1038,14 @@ function Get-HeroName([string]$Id) {
 # Hero portraits along the top of the screen: 4 per team. A slot keeps the last confident read (dead or
 # hidden portraits read badly), and the side holding your own hero is your team.
 $script:topSlots = @('', '', '', '', '', '', '', '')
+$script:topSeen = @([datetime]::MinValue) * 8
 $script:mySide = ''
 $script:enemyIds = @()
 $script:enemyKey = ''
 $script:topInfo = 'not read yet'
 function Reset-TopBar {
     $script:topSlots = @('', '', '', '', '', '', '', '')
+    $script:topSeen = @([datetime]::MinValue) * 8
     $script:mySide = ''
 }
 function Update-Enemies {
@@ -1005,11 +1067,15 @@ function Update-Enemies {
 function Read-TopBar($Bmp) {
     $slots = [TopBar]::Read($Bmp)
     $parts = @()
+    # A slot not read clearly for 3 minutes is dropped, so a hero from the last match cannot linger.
+    $now = Get-Date
+    for ($k = 0; $k -lt 8; $k++) { if ($script:topSlots[$k] -and ($now - $script:topSeen[$k]).TotalSeconds -gt 180) { $script:topSlots[$k] = '' } }
     for ($k = 0; $k -lt $slots.Count; $k++) {
         $s = $slots[$k]
         if ($s.Score -ge 0.6 -and ($s.Score - $s.Second) -ge 0.15) {
             for ($j = 0; $j -lt 8; $j++) { if ($j -ne $k -and $script:topSlots[$j] -eq $s.HeroId) { $script:topSlots[$j] = '' } }
             $script:topSlots[$k] = $s.HeroId
+            $script:topSeen[$k] = $now
             $parts += ('{0} {1:0.00}' -f (Get-HeroName $s.HeroId), $s.Score)
         } else { $parts += ('? {0:0.00}' -f $s.Score) }
         if ($k -eq 3) { $parts += '|' }
@@ -1018,6 +1084,20 @@ function Read-TopBar($Bmp) {
     $en = @($script:enemyIds | ForEach-Object { Get-HeroName $_ })
     $script:topInfo = ($parts -join ', ') + '   enemies: ' + ($en -join ', ')
     return $changed
+}
+# Refresh button / Ctrl+Alt+R: forget the hero, enemy team and match, and read them again from the screen.
+function Reset-Detection {
+    $script:heroCandidate = $null
+    $script:lastHeroInfo = 'reset'
+    if ($heroBox.SelectedIndex -ge 0) { $heroBox.SelectedIndex = -1 }
+    Reset-TopBar
+    $script:enemyIds = @(); $script:enemyKey = ''; $script:topInfo = 'reset'
+    $script:match.id = ''
+    $script:shopVisible = $true
+    $header.Invalidate()
+    Update-View
+    Set-Status 'Re-detecting hero and enemy team' $colBrass
+    Invoke-ScreenTick
 }
 function Invoke-ScreenTick {
     if (-not $settings.auto -or -not $script:screenOk) { return }
@@ -1170,6 +1250,7 @@ $timer.Add_Tick({
             Load-Data; Fill-Lists; Invoke-Rank
         }
         Update-Footer
+        Update-DataLabel
     } catch { }
 })
 
@@ -1182,6 +1263,7 @@ try {
 $script:gameBuild = Get-GameBuild
 Fill-Lists
 Update-View
+Update-DataLabel
 $form.Add_Shown({
     Update-Footer; Invoke-Rank
     # Keep this window out of screen captures, so the reader never reads its own text.
