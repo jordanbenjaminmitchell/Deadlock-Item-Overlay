@@ -1,5 +1,6 @@
 # Screen reading for the overlay: hero detection (ability icon matching), the hero portraits along the
-# top of the screen (card art matching), and shop item names (Windows built-in text recognition).
+# top of the screen (card art matching), the active item key labels (ready or cooling), and shop item
+# names (Windows built-in text recognition).
 # Reads pixels only: no game memory, no injection.
 # Windows PowerShell 5.1, no downloads.
 
@@ -211,6 +212,7 @@ public static class ScreenReader {
 
 public class TopBarSlot {
     public string HeroId = ""; public double Score; public string SecondId = ""; public double Second;
+    public bool Self;   // your own portrait: the only one drawn on a full gold square
 }
 
 // Reads the 8 hero portraits along the top of the screen (4 per team) by matching their outlines
@@ -291,6 +293,24 @@ public static class TopBar {
         return cards.Count;
     }
 
+    // Mean colour of a small patch as hue (degrees), saturation and value (0-1).
+    static void PatchHsv(Bitmap b, Rectangle r, out double h, out double s, out double v) {
+        r.Intersect(new Rectangle(0, 0, b.Width, b.Height));
+        h = 0; s = 0; v = 0;
+        if (r.Width < 1 || r.Height < 1) return;
+        double R = 0, G = 0, B = 0; int n = 0;
+        for (int y = r.Top; y < r.Bottom; y++) for (int x = r.Left; x < r.Right; x++) { Color c = b.GetPixel(x, y); R += c.R; G += c.G; B += c.B; n++; }
+        R /= n * 255.0; G /= n * 255.0; B /= n * 255.0;
+        double mx = Math.Max(R, Math.Max(G, B)), mn = Math.Min(R, Math.Min(G, B)), d = mx - mn;
+        v = mx; s = mx > 0 ? d / mx : 0;
+        if (d <= 0) h = 0;
+        else if (mx == R) h = 60 * (((G - B) / d) % 6);
+        else if (mx == G) h = 60 * ((B - R) / d + 2);
+        else h = 60 * ((R - G) / d + 4);
+        if (h < 0) h += 360;
+    }
+    static bool Gold(double h, double s, double v) { return h >= 18 && h <= 48 && s >= 0.45 && v >= 0.68; }
+
     public static TopBarSlot[] Read(Bitmap screen) {
         TopBarSlot[] res = new TopBarSlot[Offsets.Length];
         double unit = screen.Height / 1080.0;
@@ -302,6 +322,11 @@ public static class TopBar {
                 if (cards.Count == 0) continue;
                 Dictionary<string, double> best = new Dictionary<string, double>();
                 double cx = screen.Width / 2.0 + Offsets[k] * unit;
+                int x0 = (int)Math.Round(cx - CardW / 2 * unit);
+                double h1, s1, v1, h2, s2, v2;
+                PatchHsv(s32, new Rectangle(x0 + (int)(3 * unit), (int)(3 * unit), (int)Math.Max(2, 8 * unit), (int)Math.Max(2, 10 * unit)), out h1, out s1, out v1);
+                PatchHsv(s32, new Rectangle(x0 + (int)(59 * unit), (int)(3 * unit), (int)Math.Max(2, 8 * unit), (int)Math.Max(2, 10 * unit)), out h2, out s2, out v2);
+                m.Self = Gold(h1, s1, v1) && Gold(h2, s2, v2);
                 for (int dx = -6; dx <= 6; dx += 2) for (int dy = 0; dy <= 4; dy += 2) {
                     Rectangle rc = new Rectangle((int)Math.Round(cx - CardW / 2 * unit + dx * unit), (int)Math.Round(dy * unit), (int)Math.Round(CardW * unit), (int)Math.Round(CardH * unit));
                     float[] v = Feature(Gray(s32, rc, false));
@@ -319,6 +344,114 @@ public static class TopBar {
             }
         }
         return res;
+    }
+}
+
+// Active item slots (Z X C V). Reads only the small key label under each slot: white with a dark
+// letter when the item is ready, dimmed grey while it cools down. Geometry in a 1080-pixel-tall frame.
+public class SlotRead { public bool Present; public bool Ready; public double Mean, Std, Chroma; }
+public static class ItemSlots {
+    public const double LabelY = 1060, ZOffset = 238, Half = 10, ScanFrom = 30, ScanTo = 300;
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+
+    // Capture only the strip of the screen holding the labels.
+    public static Bitmap CaptureBand(out double unit, out int left) {
+        IntPtr old = IntPtr.Zero;
+        try { old = SetThreadDpiAwarenessContext(new IntPtr(-4)); } catch { }
+        try {
+            int w = GetSystemMetrics(0), h = GetSystemMetrics(1);
+            unit = h / 1080.0;
+            left = (int)(w / 2.0 + (ZOffset - 30) * unit);
+            int top = (int)((LabelY - 20) * unit);
+            int bw = (int)((ScanTo + 60) * unit), bh = (int)(40 * unit);
+            Bitmap bmp = new Bitmap(Math.Max(bw, 4), Math.Max(bh, 4), PixelFormat.Format24bppRgb);
+            using (Graphics g = Graphics.FromImage(bmp)) g.CopyFromScreen(left, top, 0, 0, bmp.Size);
+            return bmp;
+        } finally {
+            if (old != IntPtr.Zero) { try { SetThreadDpiAwarenessContext(old); } catch { } }
+        }
+    }
+
+    static byte[] Pixels(Bitmap b, out int stride) {
+        BitmapData d = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        stride = d.Stride;
+        byte[] px = new byte[d.Stride * b.Height];
+        Marshal.Copy(d.Scan0, px, 0, px.Length);
+        b.UnlockBits(d);
+        return px;
+    }
+
+    static SlotRead Stat(byte[] px, int stride, int bw, int bh, int cx, int cy, int half) {
+        SlotRead r = new SlotRead();
+        double sum = 0, sum2 = 0, chroma = 0; int n = 0;
+        for (int y = cy - half; y < cy + half; y++) {
+            if (y < 0 || y >= bh) continue;
+            for (int x = cx - half; x < cx + half; x++) {
+                if (x < 0 || x >= bw) continue;
+                int i = y * stride + x * 3;
+                double bl = px[i], gr = px[i + 1], rd = px[i + 2];
+                double l = 0.299 * rd + 0.587 * gr + 0.114 * bl;
+                sum += l; sum2 += l * l; chroma += Math.Max(rd, Math.Max(gr, bl)) - Math.Min(rd, Math.Min(gr, bl)); n++;
+            }
+        }
+        if (n == 0) return r;
+        r.Mean = sum / n; r.Std = Math.Sqrt(Math.Max(0, sum2 / n - r.Mean * r.Mean)); r.Chroma = chroma / n;
+        r.Ready = r.Mean >= 165 && r.Std >= 38 && r.Chroma <= 22;
+        bool cool = r.Mean >= 70 && r.Mean <= 150 && r.Std >= 12 && r.Std <= 45 && r.Chroma <= 35;
+        r.Present = r.Ready || cool;
+        return r;
+    }
+
+    // Read the labels at the given offsets (pixels right of screen centre, 1080 frame). NaN = unknown slot.
+    public static SlotRead[] Read(Bitmap band, double unit, int left, double screenW, double[] offsets) {
+        int stride; byte[] px = Pixels(band, out stride);
+        SlotRead[] res = new SlotRead[offsets.Length];
+        int cy = band.Height / 2, half = Math.Max(3, (int)Math.Round(Half * unit));
+        for (int k = 0; k < offsets.Length; k++) {
+            if (double.IsNaN(offsets[k])) { res[k] = new SlotRead(); continue; }
+            int cx = (int)Math.Round(screenW / 2.0 + offsets[k] * unit) - left;
+            res[k] = Stat(px, stride, band.Width, band.Height, cx, cy, half);
+        }
+        return res;
+    }
+
+    // Find ready labels right of Z (new active items), as offsets in the 1080 frame.
+    public static double[] FindReady(Bitmap band, double unit, int left, double screenW) {
+        int stride; byte[] px = Pixels(band, out stride);
+        int cy = band.Height / 2, half = Math.Max(3, (int)Math.Round(Half * unit));
+        List<double> found = new List<double>();
+        int runStart = -1;
+        int x0 = (int)Math.Round(screenW / 2.0 + (ZOffset + ScanFrom) * unit) - left;
+        int x1 = Math.Min(band.Width - half, (int)Math.Round(screenW / 2.0 + (ZOffset + ScanTo) * unit) - left);
+        for (int x = x0; x <= x1 + 1; x++) {
+            bool ok = x <= x1 && Stat(px, stride, band.Width, band.Height, x, cy, half).Ready;
+            if (ok && runStart < 0) runStart = x;
+            if (!ok && runStart >= 0) {
+                double c = (runStart + x - 1) / 2.0;
+                found.Add((c + left - screenW / 2.0) / unit);
+                runStart = -1;
+            }
+        }
+        return found.ToArray();
+    }
+
+    // A short soft ding as a WAV file in memory.
+    public static byte[] Ding(double freq, double volume) {
+        int rate = 22050, n = (int)(rate * 0.22);
+        MemoryStream ms = new MemoryStream();
+        BinaryWriter w = new BinaryWriter(ms);
+        w.Write(new char[] { 'R', 'I', 'F', 'F' }); w.Write(36 + n * 2); w.Write(new char[] { 'W', 'A', 'V', 'E' });
+        w.Write(new char[] { 'f', 'm', 't', ' ' }); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write(new char[] { 'd', 'a', 't', 'a' }); w.Write(n * 2);
+        for (int i = 0; i < n; i++) {
+            double t = (double)i / rate;
+            double env = Math.Min(1.0, t / 0.004) * Math.Exp(-t / 0.06);
+            double v = (Math.Sin(2 * Math.PI * freq * t) + 0.3 * Math.Sin(4 * Math.PI * freq * t)) / 1.3;
+            w.Write((short)(v * env * volume * 32767));
+        }
+        w.Flush();
+        return ms.ToArray();
     }
 }
 '@

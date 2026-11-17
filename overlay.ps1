@@ -1,6 +1,7 @@
 # Street Brawl item overlay window.
 # Detects your hero and the offered items from the screen, and ranks the items with Street Brawl stats.
-# Ctrl+Alt+D toggles click-through. Ctrl+Alt+R re-detects the hero and enemy team. Windows PowerShell 5.1, no downloads.
+# Ctrl+Alt+D toggles click-through. Ctrl+Alt+R re-detects the hero and enemy team.
+# Optional ding when an active item (Z X C V) comes off cooldown: reads the key labels only, never presses keys. Windows PowerShell 5.1, no downloads.
 
 param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left', [string]$DemoEnemies = '')
 # -Preview: visible to screenshots, screen reading off. -Demo: also show a sample offer (hero, items separated by |;
@@ -85,6 +86,8 @@ if ($null -eq $settings) { $settings = [pscustomobject]@{ x = 60; y = 240; opaci
 if ($null -eq $settings.PSObject.Properties['auto']) { $settings | Add-Member -NotePropertyName auto -NotePropertyValue $true }
 $settings.auto = $true
 if ($null -eq $settings.PSObject.Properties['enhBoost']) { $settings | Add-Member -NotePropertyName enhBoost -NotePropertyValue $false }
+if ($null -eq $settings.PSObject.Properties['ding']) { $settings | Add-Member -NotePropertyName ding -NotePropertyValue 'ZXCV' }
+if ($null -eq $settings.PSObject.Properties['slotOffsets']) { $settings | Add-Member -NotePropertyName slotOffsets -NotePropertyValue @() }
 
 $script:snap = $null
 $script:snapTime = $null
@@ -444,7 +447,7 @@ $dataLbl.Add_Click({
 # Manual controls, hidden until the edit button is pressed.
 $manual = New-Object Windows.Forms.Panel
 $manual.BackColor = $colBg
-$manual.SetBounds((S 22), (S 70), ($W - (S 44)), (S 100))
+$manual.SetBounds((S 22), (S 70), ($W - (S 44)), (S 134))
 $manual.Visible = $false
 $form.Controls.Add($manual)
 $mw = $manual.Width
@@ -485,6 +488,44 @@ function Switch-Boost {
     Invoke-Rank
 }
 $boostBtn.Add_Click({ Switch-Boost })
+
+# Ding when an active item comes off cooldown: one switch per key. Empty slots never ding.
+$dingLbl = New-Object Windows.Forms.Label
+$dingLbl.Text = 'Ding when ready:'
+$dingLbl.Font = $fontSmall
+$dingLbl.ForeColor = $colText2
+$dingLbl.BackColor = $colBg
+$dingLbl.AutoSize = $false
+$dingLbl.TextAlign = 'MiddleLeft'
+$dingLbl.SetBounds(0, (S 102), [int]($mw * 0.36), (S 26))
+$manual.Controls.Add($dingLbl)
+$dingBtns = @{}
+$dbw = [int](($mw - [int]($mw * 0.36) - (S 18)) / 4)
+$dk = 0
+foreach ($key in @('Z', 'X', 'C', 'V')) {
+    $b = New-FlatButton $key
+    $b.Tag = $key
+    $b.SetBounds(([int]($mw * 0.36) + $dk * ($dbw + (S 6))), (S 102), $dbw, (S 26))
+    $b.Add_Click({ param($sender, $ea) Switch-Ding ([string]$sender.Tag) })
+    $manual.Controls.Add($b)
+    $dingBtns[$key] = $b
+    $dk++
+}
+function Update-DingButtons {
+    foreach ($key in $dingBtns.Keys) {
+        $on = ([string]$settings.ding).Contains($key)
+        if ($on) { $dingBtns[$key].Text = $key + ' on'; $dingBtns[$key].ForeColor = $colBrass }
+        else { $dingBtns[$key].Text = $key + ' off'; $dingBtns[$key].ForeColor = $colBrassDim }
+    }
+}
+function Switch-Ding([string]$Key) {
+    $cur = [string]$settings.ding
+    if ($cur.Contains($Key)) { $cur = $cur.Replace($Key, '') } else { $cur += $Key }
+    $settings.ding = (@('Z', 'X', 'C', 'V') | Where-Object { $cur.Contains($_) }) -join ''
+    Update-DingButtons
+    Save-Settings
+}
+Update-DingButtons
 Update-BoostButton
 
 $editBtn.Add_Click({
@@ -1040,6 +1081,11 @@ function Get-HeroName([string]$Id) {
 $script:topSlots = @('', '', '', '', '', '', '', '')
 $script:topSeen = @([datetime]::MinValue) * 8
 $script:mySide = ''
+$script:selfHero = ''
+$script:selfSeen = [datetime]::MinValue
+$script:selfVotes = 0
+$script:heroVotes = 0
+$script:fgDeadlock = $false
 $script:enemyIds = @()
 $script:enemyKey = ''
 $script:topInfo = 'not read yet'
@@ -1047,6 +1093,9 @@ function Reset-TopBar {
     $script:topSlots = @('', '', '', '', '', '', '', '')
     $script:topSeen = @([datetime]::MinValue) * 8
     $script:mySide = ''
+    $script:selfHero = ''
+    $script:selfSeen = [datetime]::MinValue
+    $script:selfVotes = 0
 }
 function Update-Enemies {
     $me = ''
@@ -1054,7 +1103,7 @@ function Update-Enemies {
     if ($h) { $me = [string]$h.id }
     $left = @($script:topSlots[0..3] | Where-Object { $_ })
     $right = @($script:topSlots[4..7] | Where-Object { $_ })
-    if ($me) {
+    if ($me -and -not $script:selfHero) {
         if ($left -contains $me) { $script:mySide = 'L' } elseif ($right -contains $me) { $script:mySide = 'R' }
     }
     $en = @()
@@ -1080,7 +1129,19 @@ function Read-TopBar($Bmp) {
         } else { $parts += ('? {0:0.00}' -f $s.Score) }
         if ($k -eq 3) { $parts += '|' }
     }
-    $changed = Update-Enemies
+    # Your own portrait sits on a full gold square: that names your hero and your side.
+    $selfK = @(0..7 | Where-Object { $slots[$_].Self })
+    $heroChanged = $false
+    if ($selfK.Count -eq 1 -and $script:topSlots[$selfK[0]] -and $script:topSeen[$selfK[0]] -eq $now) {
+        $id = $script:topSlots[$selfK[0]]
+        if ($id -eq $script:selfHero) { $script:selfVotes++ } else { $script:selfHero = $id; $script:selfVotes = 1 }
+        $script:selfSeen = $now
+        if ($selfK[0] -lt 4) { $script:mySide = 'L' } else { $script:mySide = 'R' }
+        $parts += ('you: ' + (Get-HeroName $id))
+        $cur = Get-SelectedHero
+        if ($script:selfVotes -ge 2 -and (-not $cur -or [string]$cur.id -ne $id)) { $heroChanged = Select-HeroById $id }
+    }
+    $changed = (Update-Enemies) -or $heroChanged
     $en = @($script:enemyIds | ForEach-Object { Get-HeroName $_ })
     $script:topInfo = ($parts -join ', ') + '   enemies: ' + ($en -join ', ')
     return $changed
@@ -1088,6 +1149,7 @@ function Read-TopBar($Bmp) {
 # Refresh button / Ctrl+Alt+R: forget the hero, enemy team and match, and read them again from the screen.
 function Reset-Detection {
     $script:heroCandidate = $null
+    $script:heroVotes = 0
     $script:lastHeroInfo = 'reset'
     if ($heroBox.SelectedIndex -ge 0) { $heroBox.SelectedIndex = -1 }
     Reset-TopBar
@@ -1103,6 +1165,7 @@ function Invoke-ScreenTick {
     if (-not $settings.auto -or -not $script:screenOk) { return }
     $script:tick++
     $activeProc = [ScreenReader]::ForegroundProcess()
+    $script:fgDeadlock = ($activeProc -eq 'deadlock')
     if ($activeProc -ne 'deadlock') {
         Set-OverlayVisible $true
         if ($script:tick % 4 -eq 0) { Set-Status 'Waiting for Deadlock' $colBrassDim }
@@ -1119,17 +1182,20 @@ function Invoke-ScreenTick {
             $m = [ScreenReader]::DetectHero($bmp)
             $script:lastHeroInfo = '{0} {1:0.00} (next {2} {3:0.00})' -f (Get-HeroName $m.HeroId), $m.Score, (Get-HeroName $m.SecondId), $m.Second
             if ($m.Score -ge 1.7 -and ($m.Score - $m.Second) -ge 0.25) {
-                if ($script:heroCandidate -eq $m.HeroId) {
-                    if (Select-HeroById $m.HeroId) { $changed = $true }
-                } else { $script:heroCandidate = $m.HeroId }
+                if ($script:heroCandidate -eq $m.HeroId) { $script:heroVotes++ } else { $script:heroCandidate = $m.HeroId; $script:heroVotes = 1 }
+                # Your own portrait at the top of the screen wins: the ability bar shows a teammate's
+                # abilities while you are dead and spectating.
+                $topBarKnows = $script:selfHero -and ((Get-Date) - $script:selfSeen).TotalSeconds -lt 120
+                if ($script:heroVotes -ge 2 -and -not $topBarKnows) { if (Select-HeroById $m.HeroId) { $changed = $true } }
             }
         }
         $log += ('hero: ' + $script:lastHeroInfo)
         # Enemy heroes: every tick while the shop is up, every other tick until all 4 are known.
-        if ($script:cardCount -gt 0 -and ($script:shopVisible -or ($script:enemyIds.Count -lt 4 -and $script:tick % 2 -eq 0))) {
+        if ($script:cardCount -gt 0 -and ($script:shopVisible -or $script:tick % 4 -eq 2 -or ($script:enemyIds.Count -lt 4 -and $script:tick % 2 -eq 0))) {
             if (Read-TopBar $bmp) { $header.Invalidate(); if ($script:view.kind -eq 'rank' -or $script:view.kind -eq 'stats') { Update-View }; $changed = $true }
         }
         $log += ('top bar: ' + $script:topInfo)
+        $log += ('item slots: ' + $script:slotInfo)
         $r = Read-Shop $bmp $script:shop $null
         $read = @($r.items | ForEach-Object { $_.name })
         for ($q = 0; $q -lt $read.Count; $q++) { if ($q -lt @($r.xs).Count) { $script:offerX[$read[$q]] = [double]$r.xs[$q] } }
@@ -1233,6 +1299,76 @@ function Invoke-ScreenTick {
     }
     if ($changed -or $script:tick % 20 -eq 0) { Write-ScreenDebug $log }
 }
+# ---------- item ready ding ----------
+$script:dingPlayers = @{}
+$freqs = @{ Z = 1046.5; X = 1174.7; C = 1318.5; V = 1396.9 }
+foreach ($key in $freqs.Keys) {
+    try {
+        $ms = New-Object IO.MemoryStream(, ([ItemSlots]::Ding($freqs[$key], 0.28)))
+        $pl = New-Object System.Media.SoundPlayer($ms)
+        $pl.Load()
+        $script:dingPlayers[$key] = $pl
+    } catch { }
+}
+$script:slotStable = @('', '', '', '')
+$script:slotPending = @('', '', '', '')
+$script:slotPendingN = @(0, 0, 0, 0)
+$script:slotCoolSince = @([datetime]::MinValue) * 4
+$script:dingTicks = 0
+$script:slotInfo = ''
+function Reset-Slots { $script:slotStable = @('', '', '', ''); $script:slotPending = @('', '', '', ''); $script:slotPendingN = @(0, 0, 0, 0) }
+function Get-SlotOffsets {
+    $o = @([double][ItemSlots]::ZOffset) + @($settings.slotOffsets | ForEach-Object { [double]$_ } | Sort-Object)
+    while ($o.Count -lt 4) { $o += [double]::NaN }
+    return [double[]]@($o[0..3])
+}
+function Invoke-DingTick {
+    if (-not $script:screenOk -or -not $settings.auto -or -not $settings.ding) { return }
+    if (-not $script:fgDeadlock -or $script:shopVisible -or -not (Get-SelectedHero)) { Reset-Slots; return }
+    $script:dingTicks++
+    $bu = 0.0; $bl = 0
+    $band = $null
+    try {
+        $band = [ItemSlots]::CaptureBand([ref]$bu, [ref]$bl)
+        $sw = [double][Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+        # New active items (right of Z) are found the first time their label shows ready.
+        if ($script:dingTicks % 10 -eq 0) {
+            $known = @($settings.slotOffsets | ForEach-Object { [double]$_ })
+            $added = $false
+            foreach ($f in [ItemSlots]::FindReady($band, $bu, $bl, $sw)) {
+                if ([Math]::Abs($f - [ItemSlots]::ZOffset) -lt 20) { continue }
+                if (@($known | Where-Object { [Math]::Abs($_ - $f) -lt 12 }).Count -gt 0) { continue }
+                if ($known.Count -ge 3) { break }
+                $known += [Math]::Round($f, 1); $added = $true
+            }
+            if ($added) { $settings.slotOffsets = @($known | Sort-Object); Save-Settings }
+        }
+        $reads = [ItemSlots]::Read($band, $bu, $bl, $sw, (Get-SlotOffsets))
+        $keys = @('Z', 'X', 'C', 'V')
+        $now = Get-Date
+        $info = @()
+        for ($k = 0; $k -lt 4; $k++) {
+            $r = $reads[$k]
+            if (-not $r.Present) { $info += ($keys[$k] + ':-'); continue }
+            $st = 'cool'
+            if ($r.Ready) { $st = 'ready' }
+            $info += ($keys[$k] + ':' + $st)
+            if ($script:slotPending[$k] -eq $st) { $script:slotPendingN[$k]++ } else { $script:slotPending[$k] = $st; $script:slotPendingN[$k] = 1 }
+            if ($script:slotPendingN[$k] -lt 2 -or $script:slotStable[$k] -eq $st) { continue }
+            if ($st -eq 'cool') { $script:slotCoolSince[$k] = $now }
+            elseif ($script:slotStable[$k] -eq 'cool' -and ($now - $script:slotCoolSince[$k]).TotalSeconds -ge 1.5 -and ([string]$settings.ding).Contains($keys[$k])) {
+                $pl = $script:dingPlayers[$keys[$k]]
+                if ($pl) { $pl.Play() }
+            }
+            $script:slotStable[$k] = $st
+        }
+        $script:slotInfo = $info -join ' '
+    } catch { $script:slotInfo = 'error: ' + $_.Exception.Message } finally { if ($band) { $band.Dispose() } }
+}
+$dingTimer = New-Object Windows.Forms.Timer
+$dingTimer.Interval = 300
+$dingTimer.Add_Tick({ Invoke-DingTick })
+
 $screenTimer = New-Object Windows.Forms.Timer
 $screenTimer.Interval = 1500
 $screenTimer.Add_Tick({ Invoke-ScreenTick })
@@ -1291,6 +1427,8 @@ $form.Add_Shown({
 })
 $timer.Start()
 $screenTimer.Start()
+$dingTimer.Start()
 [Windows.Forms.Application]::Run($form)
 $timer.Stop()
 $screenTimer.Stop()
+$dingTimer.Stop()
