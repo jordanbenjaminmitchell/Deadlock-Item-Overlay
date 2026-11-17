@@ -435,14 +435,29 @@ $collectTimer.Add_Tick({
         Update-DataLabel
     }
 })
-$dataLbl.Add_Click({
+function Start-DataRefresh {
     if ($script:collectProc -and -not $script:collectProc.HasExited) { return }
+    $script:lastAutoRefresh = Get-Date
     try {
         $script:collectProc = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'collect.ps1') + '"'))
         $collectTimer.Start()
     } catch { Set-Status ('Could not start the refresh: ' + $_.Exception.Message) $colRed }
     Update-DataLabel
-})
+}
+$dataLbl.Add_Click({ Start-DataRefresh })
+
+# Refresh on its own (hidden) when the numbers are more than 18 hours old: at start-up and while running.
+# After a try it waits an hour before trying again, so a failing refresh does not loop.
+$script:lastAutoRefresh = [datetime]::MinValue
+function Invoke-AutoRefresh {
+    if ($Preview) { return }
+    if (((Get-Date) - $script:lastAutoRefresh).TotalMinutes -lt 60) { return }
+    $t = $null
+    try { if ($script:snap.collected_at) { $t = [datetime]::Parse([string]$script:snap.collected_at) } } catch { }
+    if (-not $t) { $t = $script:snapTime }
+    if ($t -and ((Get-Date) - $t).TotalHours -lt 18) { return }
+    Start-DataRefresh
+}
 
 # Manual controls, hidden until the edit button is pressed.
 $manual = New-Object Windows.Forms.Panel
@@ -1387,6 +1402,7 @@ $timer.Add_Tick({
         }
         Update-Footer
         Update-DataLabel
+        Invoke-AutoRefresh
     } catch { }
 })
 
@@ -1400,6 +1416,7 @@ $script:gameBuild = Get-GameBuild
 Fill-Lists
 Update-View
 Update-DataLabel
+Invoke-AutoRefresh
 $form.Add_Shown({
     Update-Footer; Invoke-Rank
     # Keep this window out of screen captures, so the reader never reads its own text.
