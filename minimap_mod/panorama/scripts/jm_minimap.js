@@ -249,7 +249,11 @@
       }
       if (b.BHasClass("mid_boss")) { out.midBoss = pos; out.midUp = b.BHasClass("midboss_spawned"); continue; }
       if (b.BHasClass("idol_return_friendly") || (b.BHasClass("idol_return") && b.BHasClass("friend"))) { out.urnReturn = pos; continue; }
-      if (b.BHasClass("shop") && !b.BHasClass("shop_tunnel_exit")) { out.shops.push(pos); continue; }
+      // Shops: only your team's (enemy shops won't sell to you).
+      if (b.BHasClass("shop") && !b.BHasClass("shop_tunnel_exit")) {
+        if (!b.BHasClass("enemy")) out.shops.push({ x: pos.x, y: pos.y, friend: b.BHasClass("friend") });
+        continue;
+      }
       if (b.BHasClass("bridge_buff") || b.BHasClass("powerup_spawn")) { out.buffs.push(pos); continue; }
       if (b.BHasClass("capture_point")) { out.rift = pos; out.riftWarning = b.BHasClass("koth_warning"); continue; }
       if (b.BHasClass("idol_spawn")) { out.urn = pos; continue; }
@@ -576,7 +580,13 @@
 
     // 8) Nearest shop: always a faint arrow.
     let shop = null, shopD = Infinity;
-    if (s.player) for (const p of s.shops) { const d = Math.hypot(p.x - s.player.x, p.y - s.player.y); if (d < shopD) { shopD = d; shop = p; } }
+    // If any shop is marked friendly, use only those; otherwise all shops not marked enemy.
+    const anyFriend = s.shops.some((p) => p.friend);
+    if (s.player) for (const p of s.shops) {
+      if (anyFriend && !p.friend) continue;
+      const d = Math.hypot(p.x - s.player.x, p.y - s.player.y);
+      if (d < shopD) { shopD = d; shop = p; }
+    }
     aim(arrows.shop, s.player, shop, dim);
 
     // 9) Last-seen enemies: a faded marker where an enemy dropped off the minimap, with seconds since.
@@ -604,7 +614,7 @@
     debug(fmt(t) + " | me " + (me ? me.u.toFixed(3) + "," + me.v.toFixed(3) : "NO") +
       " | near " + (nearName || "-") + " | sinner " + (nearV >= 0 ? CAMPS[nearV][3] : "-") +
       " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length +
-      " | enemies " + s.enemies.length + (usesIsVisible ? "v" : "") + " shops " + s.shops.length +
+      " | enemies " + s.enemies.length + (usesIsVisible ? "v" : "") + " shops " + s.shops.length + (s.shops.some((p) => p.friend) ? "f" : "") +
       " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : "") +
       (arrowError ? " | ARROW " + arrowError : ""));
   }
