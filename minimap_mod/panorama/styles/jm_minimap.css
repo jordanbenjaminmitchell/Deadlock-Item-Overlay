@@ -63,6 +63,9 @@
 .jm_arrow_buff { background-color: #C49BFFCC; }
 .jm_arrow_urn { background-color: #FFD45CCC; }
 .jm_arrow_rift { background-color: #5FE0CFCC; }
+.jm_arrow_mid { background-color: #FF9A3CCC; }
+.jm_arrow_deliver { background-color: #FFD45C; height: 4px; margin-top: -2px; }
+.jm_arrow_shop { background-color: #FFFFFF55; height: 2px; margin-top: -1px; }
 
 /* Arrow tip: a small diamond at the far end */
 .jm_head
@@ -81,6 +84,41 @@
 .jm_arrow_buff .jm_head { background-color: #C49BFF; }
 .jm_arrow_urn .jm_head { background-color: #FFD45C; }
 .jm_arrow_rift .jm_head { background-color: #5FE0CF; }
+.jm_arrow_mid .jm_head { background-color: #FF9A3C; }
+.jm_arrow_deliver .jm_head { background-color: #FFD45C; width: 11px; height: 11px; margin-right: -5px; }
+.jm_arrow_shop .jm_head { background-color: #FFFFFF88; width: 7px; height: 7px; margin-right: -3px; }
+
+/* Last-seen enemy: faded red ring with seconds since the minimap last showed them */
+.jm_ghost
+{
+	width: 18px;
+	height: 18px;
+	margin-left: -9px;
+	margin-top: -9px;
+	border-radius: 50%;
+	border: 2px solid #FF4D4D;
+	background-color: #FF4D4D33;
+	opacity: 0;
+	overflow: noclip;
+}
+
+.jm_ghost_time
+{
+	horizontal-align: center;
+	vertical-align: bottom;
+	margin-bottom: -15px;
+	font-family: sansMono;
+	font-size: 11px;
+	font-weight: bold;
+	color: #FFB3B3;
+	text-shadow: 0px 0px 2px 2px #000000;
+}
+
+/* The map is flipped for one team: keep the seconds readable */
+.invert_map .jm_ghost_time
+{
+	transform: scaleX(-1) scaleY(-1);
+}
 
 /* Crate clusters: green glow dots (map knowledge, not live data) */
 .jm_crate
@@ -182,6 +220,7 @@
 .jm_row.jm_rift .jm_time { color: #5FE0CF; }
 .jm_row.jm_urn .jm_time { color: #FFD45C; }
 .jm_row.jm_buff .jm_time { color: #C49BFF; }
+.jm_row.jm_mid .jm_time { color: #FF9A3C; }
 .jm_row.jm_now .jm_time { color: #7CFF8A; }
 
 /* Debug status line (temporary, for testing) */

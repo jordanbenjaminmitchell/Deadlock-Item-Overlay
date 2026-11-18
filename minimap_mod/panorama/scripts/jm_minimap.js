@@ -147,7 +147,7 @@
   let root = null, clockLabel = null;
   let layer = null, timers = null, nearestRing = null, vaultRing = null;
   const arrows = {};   // camp, vault, crate, buff, urn, rift
-  const crateDots = [], spotDots = {};
+  const crateDots = [], spotDots = {}, ghosts = [];
 
   function findRoot() {
     let p = mm;
@@ -190,9 +190,13 @@
       for (const key of ["buff0", "buff1", "urn0", "urn1", "rift0", "rift1"]) {
         spotDots[key] = makePanel("Panel", layer, "JMSpot_" + key, "jm_spot");
       }
+      for (let i = 0; i < 8; i++) {
+        const gp = makePanel("Panel", layer, "JMGhost" + i, "jm_ghost");
+        ghosts.push({ panel: gp, label: makePanel("Label", gp, "", "jm_ghost_time") });
+      }
       nearestRing = makePanel("Panel", layer, "JMNearest", "jm_nearest");
       vaultRing = makePanel("Panel", layer, "JMNearestVault", "jm_nearest jm_vault");
-      for (const key of ["crate", "buff", "camp", "vault", "urn", "rift"]) {
+      for (const key of ["shop", "crate", "buff", "camp", "vault", "urn", "rift", "mid", "deliver"]) {
         arrows[key] = makePanel("Panel", layer, "JMArrow_" + key, "jm_arrow jm_arrow_" + key);
         makePanel("Panel", arrows[key], "", "jm_head");
       }
@@ -221,18 +225,53 @@
   function scan() {
     let buttons = [];
     try { buttons = mm.FindChildrenWithClassTraverse("map_button") || []; } catch (e) {}
-    const out = { player: null, midBoss: null, buffs: [], rift: null, riftWarning: false, urn: null };
+    const out = { player: null, midBoss: null, midUp: false, buffs: [], rift: null, riftWarning: false, urn: null,
+                  urnReturn: null, holdingUrn: false, shops: [], enemies: [] };
+    let ei = 0;
     for (const b of buttons) {
       if (!ok(b)) continue;
       const pos = center(b);
       if (!pos) continue;
-      if (b.BHasClass("localplayer")) { out.player = pos; continue; }
-      if (b.BHasClass("mid_boss")) { out.midBoss = pos; continue; }
+      if (b.BHasClass("localplayer")) {
+        out.player = pos;
+        out.holdingUrn = b.BHasClass("holding_idol") || b.BHasClass("PlayerIsHoldingIdol");
+        continue;
+      }
+      if (b.BHasClass("player") && b.BHasClass("enemy")) {
+        const shown = b.visible !== false && !b.BHasClass("hide_button") && (Number(b.actuallayoutwidth) || 0) > 0;
+        if (b.BHasClass("is_visible")) usesIsVisible = true;
+        out.enemies.push({ key: b.id || ("enemy" + ei), pos, seen: shown && (!usesIsVisible || b.BHasClass("is_visible")),
+                           dead: b.BHasClass("PlayerDead") });
+        ei++;
+        continue;
+      }
+      if (b.BHasClass("mid_boss")) { out.midBoss = pos; out.midUp = b.BHasClass("midboss_spawned"); continue; }
+      if (b.BHasClass("idol_return_friendly") || (b.BHasClass("idol_return") && b.BHasClass("friend"))) { out.urnReturn = pos; continue; }
+      if (b.BHasClass("shop") && !b.BHasClass("shop_tunnel_exit")) { out.shops.push(pos); continue; }
       if (b.BHasClass("bridge_buff") || b.BHasClass("powerup_spawn")) { out.buffs.push(pos); continue; }
       if (b.BHasClass("capture_point")) { out.rift = pos; out.riftWarning = b.BHasClass("koth_warning"); continue; }
       if (b.BHasClass("idol_spawn")) { out.urn = pos; continue; }
     }
+    try {
+      if (!out.holdingUrn && (mm.BHasClass("PlayerIsHoldingIdol") || (root && root.BHasClass("PlayerIsHoldingIdol")))) out.holdingUrn = true;
+      if (!out.midUp && mm.BHasClass("midboss_spawned")) out.midUp = true;
+    } catch (e) {}
     return out;
+  }
+  let usesIsVisible = false;   // once any enemy icon carries is_visible, hidden enemies lack it
+
+  // Mid-Boss respawn time as the game shows it (a "midboss_timer" label), in seconds; -1 if not shown.
+  function midBossTimer() {
+    try {
+      if (!ok(root)) root = findRoot();
+      const found = root ? root.FindChildrenWithClassTraverse("midboss_timer") : null;
+      if (found) for (const p of found) {
+        const txt = p.text !== undefined ? p.text : null;
+        const v = parseClock(txt);
+        if (v >= 0) return v;
+      }
+    } catch (e) {}
+    return -1;
   }
 
   // Map (u, v) <-> minimap pixels. Calibrated live from icons whose map
@@ -290,6 +329,8 @@
   const campDwell = [];      // index -> game time you arrived at it
   const crateLooted = [];    // index -> game time the player passed through
   const buffTaken = [];      // bridge index -> game time you stood at it
+  const lastSeen = {};       // enemy key -> { pos, t } where and when the minimap last showed them
+  const GHOST_SECONDS = 45;  // how long a last-seen marker stays
   let riftLast = -1;         // game time the last Rift opened
   let riftWasUp = false;
   let riftWarnAt = -1;       // game time the minimap warning first appeared
@@ -299,6 +340,8 @@
     campDwell.length = 0;
     crateLooted.length = 0;
     buffTaken.length = 0;
+    for (const k of Object.keys(lastSeen)) delete lastSeen[k];
+    usesIsVisible = false;
     riftLast = -1;
     riftWasUp = false;
     riftWarnAt = -1;
@@ -513,10 +556,46 @@
       show(d, !!riftRow && (!riftActual || isActual));
     });
 
+    // 6) Soul Urn delivery: while you carry it, arrow to your team's drop-off.
+    aim(arrows.deliver, s.player, s.holdingUrn ? s.urnReturn : null, dim);
+
+    // 7) Mid-Boss: arrow while it is up; countdown from the game's own respawn timer when shown.
+    aim(arrows.mid, s.player, s.midUp ? s.midBoss : null, dim);
+    const midT = s.midUp ? -1 : midBossTimer();
+    if (midT > 0 && midT <= 60) rows.push({ due: midT, cls: "jm_mid", text: "Mid-Boss" });
+
+    // 8) Nearest shop: always a faint arrow.
+    let shop = null, shopD = Infinity;
+    if (s.player) for (const p of s.shops) { const d = Math.hypot(p.x - s.player.x, p.y - s.player.y); if (d < shopD) { shopD = d; shop = p; } }
+    aim(arrows.shop, s.player, shop, dim);
+
+    // 9) Last-seen enemies: a faded marker where an enemy dropped off the minimap, with seconds since.
+    // (an icon that is hidden or removed both count as "not seen now")
+    for (const key of Object.keys(lastSeen)) lastSeen[key].seenNow = false;
+    for (const e of s.enemies) {
+      if (e.dead) { delete lastSeen[e.key]; continue; }
+      if (e.seen) lastSeen[e.key] = { pos: e.pos, t, seenNow: true };
+    }
+    let gi = 0;
+    for (const key of Object.keys(lastSeen)) {
+      const ls = lastSeen[key];
+      const age = t - ls.t;
+      if (ls.seenNow || age > GHOST_SECONDS) { if (age > GHOST_SECONDS) delete lastSeen[key]; continue; }
+      if (gi >= ghosts.length) break;
+      const g = ghosts[gi++];
+      place(g.panel, ls.pos, dim);
+      g.label.text = Math.max(1, Math.round(age)) + "s";
+      g.panel.style.opacity = (0.95 - 0.6 * age / GHOST_SECONDS).toFixed(2);
+      show(g.panel, true);
+    }
+    for (; gi < ghosts.length; gi++) show(ghosts[gi].panel, false);
+
     render(rows);
     debug(fmt(t) + " | me " + (me ? me.u.toFixed(3) + "," + me.v.toFixed(3) : "NO") +
       " | near " + (nearName || "-") + " | sinner " + (nearV >= 0 ? CAMPS[nearV][3] : "-") +
-      " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length);
+      " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length +
+      " | enemies " + s.enemies.length + (usesIsVisible ? "v" : "") + " shops " + s.shops.length +
+      " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : ""));
   }
 
   // ---------- countdown stack ----------

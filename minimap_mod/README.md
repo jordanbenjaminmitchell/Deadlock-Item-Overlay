@@ -13,6 +13,10 @@ Built for game build 6821 (City Never Sleeps, Oct 26 2026).
   - Purple: nearest bridge power-up, from each 5:00 spawn until you have stood at that bridge.
   - Gold: the Soul Urn pad, once the game shows the Urn.
   - Teal: the Unstable Rift bridge, once the game shows it (warning or open).
+  - Orange: the Mid-Boss while it is up. Its respawn countdown joins the countdown stack in the last minute, read from the game's own Mid-Boss timer.
+  - Thick gold: while you carry the Soul Urn, your team's drop-off point.
+  - Faint white: the nearest shop, always.
+- **Last-seen enemies:** when an enemy drops off the minimap, a faded red ring stays where they were last shown, with the seconds since (up to 45 seconds). It disappears when they show up again or die.
 - **Green glow** on crate clusters once they have spawned. A cluster goes dark after you walk through it and comes back when it should respawn. The game does not show crates on the minimap, so this is map knowledge, not live info.
 - **Countdowns at the top-left of the minimap**, starting 20 seconds before each spawn:
   - Camps: first spawns (small 2:00, medium 5:00, large and Sinner's 8:00), then each camp's own respawn after you see it cleared (small 1:25, medium 4:50, large 5:35, Sinner's 5:00), with a rough place name.
