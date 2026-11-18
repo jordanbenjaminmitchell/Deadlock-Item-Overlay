@@ -238,7 +238,7 @@
         out.holdingUrn = b.BHasClass("holding_idol") || b.BHasClass("PlayerIsHoldingIdol");
         continue;
       }
-      if (b.visible === false && !b.BHasClass("enemy")) continue;   // hidden markers are not targets
+      const hidden = b.visible === false;   // only trusted for markers that come and go (Rift, Urn)
       if (b.BHasClass("player") && b.BHasClass("enemy")) {
         const shown = b.visible !== false && !b.BHasClass("hide_button") && (Number(b.actuallayoutwidth) || 0) > 0;
         if (b.BHasClass("is_visible")) usesIsVisible = true;
@@ -247,24 +247,31 @@
         ei++;
         continue;
       }
-      if (b.BHasClass("mid_boss")) { out.midBoss = pos; out.midUp = b.BHasClass("midboss_spawned"); continue; }
-      if (b.BHasClass("idol_return_friendly") || (b.BHasClass("idol_return") && b.BHasClass("friend"))) { out.urnReturn = pos; continue; }
+      if (b.BHasClass("mid_boss")) {
+        out.midBoss = pos;
+        // Only the Mid-Boss marker's own state counts (the minimap-wide class showed "up" at 2:00).
+        out.midUp = b.BHasClass("midboss_spawned") && !b.BHasClass("midboss_timer");
+        out.midCls = MID_CLASSES.filter((c) => b.BHasClass(c)).join(",");
+        continue;
+      }
+      if (b.BHasClass("idol_return_friendly") || (b.BHasClass("idol_return") && b.BHasClass("friend"))) { if (!hidden) out.urnReturn = pos; continue; }
       // Shops: only your team's (enemy shops won't sell to you).
       if (b.BHasClass("shop") && !b.BHasClass("shop_tunnel_exit")) {
         if (!b.BHasClass("enemy")) out.shops.push({ x: pos.x, y: pos.y, friend: b.BHasClass("friend") });
         continue;
       }
       if (b.BHasClass("bridge_buff") || b.BHasClass("powerup_spawn")) { out.buffs.push(pos); continue; }
-      if (b.BHasClass("capture_point")) { out.rift = pos; out.riftWarning = b.BHasClass("koth_warning"); continue; }
-      if (b.BHasClass("idol_spawn")) { out.urn = pos; continue; }
+      if (b.BHasClass("capture_point")) { if (!hidden) { out.rift = pos; out.riftWarning = b.BHasClass("koth_warning"); } continue; }
+      if (b.BHasClass("idol_spawn")) { if (!hidden) out.urn = pos; continue; }
     }
     try {
       if (!out.holdingUrn && (mm.BHasClass("PlayerIsHoldingIdol") || (root && root.BHasClass("PlayerIsHoldingIdol")))) out.holdingUrn = true;
-      if (!out.midUp && mm.BHasClass("midboss_spawned")) out.midUp = true;
     } catch (e) {}
     return out;
   }
-  let usesIsVisible = false;   // once any enemy icon carries is_visible, hidden enemies lack it
+  let usesIsVisible = false;
+  // Classes to report from the Mid-Boss marker, to learn its states (not spawned / soon / up).
+  const MID_CLASSES = ["midboss_spawned", "midboss_timer", "active", "boss", "is_visible", "hasActivateEvent", "idolPulse", "hide_button", "dead_button_image"];   // once any enemy icon carries is_visible, hidden enemies lack it
 
   // Mid-Boss respawn time as the game shows it (a "midboss_timer" label), in seconds; -1 if not shown.
   function midBossTimer() {
@@ -650,7 +657,7 @@
       " | near " + (nearName || "-") + " | sinner " + (nearV >= 0 ? CAMPS[nearV][3] : "-") +
       " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length +
       " | enemies " + s.enemies.length + (usesIsVisible ? "v" : "") + " shops " + s.shops.length + (s.shops.some((p) => p.friend) ? "f" : "") +
-      " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : "") +
+      " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " [" + (s.midCls || "") + "]" + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : "") +
       (arrowError ? " | ARROW " + arrowError : ""));
   }
 
