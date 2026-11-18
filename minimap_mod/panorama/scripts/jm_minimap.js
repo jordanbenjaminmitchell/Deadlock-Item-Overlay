@@ -145,7 +145,7 @@
   // ---------- panels ----------
   const mm = $.GetContextPanel();   // the HudMinimap panel this layout builds
   let root = null, clockLabel = null;
-  let layer = null, timers = null, nearestRing = null, vaultRing = null;
+  let layer = null, timers = null, nearestRing = null, vaultRing = null, meRing = null;
   const arrows = {};   // camp, vault, crate, buff, urn, rift
   const crateDots = [], spotDots = {}, ghosts = [];
 
@@ -194,6 +194,7 @@
         const gp = makePanel("Panel", layer, "JMGhost" + i, "jm_ghost");
         ghosts.push({ panel: gp, label: makePanel("Label", gp, "", "jm_ghost_time") });
       }
+      meRing = makePanel("Panel", layer, "JMMe", "jm_me");
       nearestRing = makePanel("Panel", layer, "JMNearest", "jm_nearest");
       vaultRing = makePanel("Panel", layer, "JMNearestVault", "jm_nearest jm_vault");
       for (const key of ["shop", "crate", "buff", "camp", "vault", "urn", "rift", "mid", "deliver"]) {
@@ -324,17 +325,19 @@
 
   // Arrow from your icon toward a target, stopping short of the target's ring.
   // Lengths are converted to % of the minimap width, like every other position here.
-  const ARROW_GAP = 17;          // pixels left before the target (ring radius + a little)
+  const ARROW_GAP = 12;          // pixels left before the target (ring radius + a little)
+  const ARROW_START = 13;        // pixels skipped at your end, so the arrow starts outside your hero icon
   function aim(arrow, from, to, dim) {
     if (!ok(arrow)) return;
     if (!from || !to) { show(arrow, false); return; }
     const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy);
-    if (len < ARROW_GAP + 10 || len > 3 * Math.max(dim.w, dim.h)) { show(arrow, false); return; }
+    if (len < ARROW_GAP + ARROW_START + 8 || len > 3 * Math.max(dim.w, dim.h)) { show(arrow, false); return; }
     try {
-      place(arrow, from, dim);
+      const start = { x: from.x + dx / len * ARROW_START, y: from.y + dy / len * ARROW_START };
+      place(arrow, start, dim);
       // Panorama wants whole layout pixels here; actual pixels / UI scale = layout pixels.
       const sc = Number(mm.actualuiscale_x) || 1;
-      arrow.style.width = Math.max(1, Math.round((len - ARROW_GAP) / sc)) + "px";
+      arrow.style.width = Math.max(1, Math.round((len - ARROW_GAP - ARROW_START) / sc)) + "px";
       arrow.style.transform = "rotateZ(" + Math.round(Math.atan2(dy, dx) * 180 / Math.PI) + "deg)";
       show(arrow, true);
       shownNow[arrow.id] = true;
@@ -609,6 +612,10 @@
       d.SetHasClass("jm_actual", isActual);
       show(d, !!riftRow && (!riftActual || isActual));
     });
+
+    // A thin white ring around your own icon, so the arrows clearly start from you.
+    if (s.player) place(meRing, s.player, dim);
+    show(meRing, !!s.player);
 
     // 6) Soul Urn delivery: while you carry it, arrow to your team's drop-off.
     aim(arrows.deliver, s.player, s.holdingUrn ? s.urnReturn : null, dim);

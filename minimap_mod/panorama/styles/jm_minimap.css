@@ -9,17 +9,16 @@
 	overflow: noclip;
 }
 
-/* Nearest live camp: blue glow ring over the game's camp icon */
+/* Nearest live camp: thin blue ring over the game's camp icon (no fill, small glow) */
 .jm_nearest
 {
-	width: 30px;
-	height: 30px;
-	margin-left: -15px;
-	margin-top: -15px;
+	width: 20px;
+	height: 20px;
+	margin-left: -10px;
+	margin-top: -10px;
 	border-radius: 50%;
-	border: 3px solid #3FA9FF;
-	box-shadow: 0px 0px 10px 2px #3FA9FFCC;
-	background-color: #3FA9FF22;
+	border: 2px solid #3FA9FF;
+	box-shadow: 0px 0px 2px 1px #000000AA;
 	opacity: 0;
 	transition-property: opacity;
 	transition-duration: 0.25s;
@@ -33,9 +32,25 @@
 /* Nearest Sinner's Sacrifice: pink ring */
 .jm_nearest.jm_vault
 {
-	border: 3px solid #FF6FD8;
-	box-shadow: 0px 0px 10px 2px #FF6FD8CC;
-	background-color: #FF6FD822;
+	border: 2px solid #FF6FD8;
+}
+
+/* You: thin white ring around your own hero icon, where every arrow starts */
+.jm_me
+{
+	width: 22px;
+	height: 22px;
+	margin-left: -11px;
+	margin-top: -11px;
+	border-radius: 50%;
+	border: 2px solid #FFFFFFE6;
+	box-shadow: 0px 0px 2px 1px #000000AA;
+	opacity: 0;
+}
+
+.jm_me.jm_on
+{
+	opacity: 1;
 }
 
 /* Arrows from your icon: nearest camp (blue), Sinner's Sacrifice (pink), crate cluster (green),
@@ -45,6 +60,7 @@
 {
 	height: 3px;
 	margin-top: -1.5px;
+	box-shadow: 0px 0px 2px 1px #000000B3;
 	transform-origin: 0% 50%;
 	overflow: noclip;
 	opacity: 0;
@@ -54,7 +70,7 @@
 
 .jm_arrow.jm_on
 {
-	opacity: 0.9;
+	opacity: 1;
 }
 
 .jm_arrow_camp { background-color: #3FA9FFCC; }
@@ -128,9 +144,8 @@
 	margin-left: -3.5px;
 	margin-top: -3.5px;
 	border-radius: 50%;
-	background-color: #4CE06A55;
-	border: 1px solid #4CE06AAA;
-	box-shadow: 0px 0px 3px 1px #4CE06A88;
+	background-color: #4CE06A40;
+	border: 1px solid #4CE06A99;
 	opacity: 0;
 	transition-property: opacity;
 	transition-duration: 0.4s;
@@ -146,7 +161,7 @@
 
 .jm_crate.jm_on
 {
-	opacity: 0.9;
+	opacity: 0.75;
 }
 
 /* Possible spawn spot for an upcoming event (Urn pad, Rift bridge, power-up) */
@@ -168,8 +183,7 @@
 
 .jm_spot.jm_actual
 {
-	border: 3px solid #FFD45C;
-	box-shadow: 0px 0px 10px 2px #FFD45CBB;
+	border: 2px solid #FFD45C;
 }
 
 /* Countdown stack, top-left of the minimap */

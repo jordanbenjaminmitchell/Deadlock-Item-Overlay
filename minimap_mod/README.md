@@ -6,8 +6,8 @@ Built for game build 6821 (City Never Sleeps, Oct 26 2026).
 
 ## What it does
 
-- **Blue glow** on the live camp nearest to you.
-- **Arrows from your icon**, each in its own color:
+- **Blue ring** on the live camp nearest to you.
+- **Arrows from your icon**, each in its own color. A thin white ring marks you, and each arrow starts just outside it:
   - Blue: nearest camp that should be up. Pink (with a pink ring): nearest Sinner's Sacrifice. Both follow the camp schedule and the "you stood there" clears below, so they move on after you farm one.
   - Green (thinner): nearest crate cluster that is glowing.
   - Purple: nearest bridge power-up, from each 5:00 spawn until you have stood at that bridge.
