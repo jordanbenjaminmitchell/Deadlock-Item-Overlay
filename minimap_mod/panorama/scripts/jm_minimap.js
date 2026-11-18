@@ -218,7 +218,8 @@
 
   function center(btn) {
     const x = Number(btn.actualxoffset), y = Number(btn.actualyoffset);
-    if (!isFinite(x) || !isFinite(y)) return null;
+    // Hidden markers report a placeholder offset (around 3e38): treat those as "not on the map".
+    if (!isFinite(x) || !isFinite(y) || Math.abs(x) > 100000 || Math.abs(y) > 100000) return null;
     return { x: x + (Number(btn.actuallayoutwidth) || 0) / 2, y: y + (Number(btn.actuallayoutheight) || 0) / 2 };
   }
 
@@ -237,6 +238,7 @@
         out.holdingUrn = b.BHasClass("holding_idol") || b.BHasClass("PlayerIsHoldingIdol");
         continue;
       }
+      if (b.visible === false && !b.BHasClass("enemy")) continue;   // hidden markers are not targets
       if (b.BHasClass("player") && b.BHasClass("enemy")) {
         const shown = b.visible !== false && !b.BHasClass("hide_button") && (Number(b.actuallayoutwidth) || 0) > 0;
         if (b.BHasClass("is_visible")) usesIsVisible = true;
@@ -316,12 +318,20 @@
     if (!ok(arrow)) return;
     if (!from || !to) { show(arrow, false); return; }
     const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy);
-    if (len < ARROW_GAP + 10) { show(arrow, false); return; }
-    place(arrow, from, dim);
-    arrow.style.width = (((len - ARROW_GAP) / dim.w) * 100).toFixed(3) + "%";
-    arrow.style.transform = "rotateZ(" + (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(1) + "deg)";
-    show(arrow, true);
+    if (len < ARROW_GAP + 10 || len > 3 * Math.max(dim.w, dim.h)) { show(arrow, false); return; }
+    try {
+      place(arrow, from, dim);
+      // Panorama wants whole layout pixels here; actual pixels / UI scale = layout pixels.
+      const sc = Number(mm.actualuiscale_x) || 1;
+      arrow.style.width = Math.max(1, Math.round((len - ARROW_GAP) / sc)) + "px";
+      arrow.style.transform = "rotateZ(" + Math.round(Math.atan2(dy, dx) * 180 / Math.PI) + "deg)";
+      show(arrow, true);
+    } catch (e) {
+      show(arrow, false);
+      if (!arrowError) { arrowError = String(e); log("arrow error " + e); }
+    }
   }
+  let arrowError = "";
 
   // ---------- state ----------
   let lastT = -1;
@@ -595,7 +605,8 @@
       " | near " + (nearName || "-") + " | sinner " + (nearV >= 0 ? CAMPS[nearV][3] : "-") +
       " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length +
       " | enemies " + s.enemies.length + (usesIsVisible ? "v" : "") + " shops " + s.shops.length +
-      " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : ""));
+      " | mid " + (s.midUp ? "up" : (midT >= 0 ? fmt(midT) : "-")) + " | urn " + (s.holdingUrn ? "HELD" : "-") + (s.urnReturn ? "+ret" : "") +
+      (arrowError ? " | ARROW " + arrowError : ""));
   }
 
   // ---------- countdown stack ----------
