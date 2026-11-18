@@ -446,6 +446,78 @@ function Start-DataRefresh {
 }
 $dataLbl.Add_Click({ Start-DataRefresh })
 
+# ---------- minimap mod (regular mode) ----------
+# The mod's sources live in minimap_mod\. When they change, or a game patch removed the mod, it is rebuilt
+# and installed hidden, but only while Deadlock is closed (the game locks its files). Tries at most every 30 min.
+$ModDir = Join-Path $PSScriptRoot 'minimap_mod'
+$ModStatePath = Join-Path $PSScriptRoot 'data\minimap_mod_state.json'
+$ModLog = Join-Path $PSScriptRoot 'data\minimap_mod.log'
+$script:modProc = $null
+$script:lastModTry = [datetime]::MinValue
+$script:modStatus = ''
+function Get-ModHash {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $ms = New-Object IO.MemoryStream
+    foreach ($f in @(Get-ChildItem (Join-Path $ModDir 'panorama') -Recurse -File | Where-Object { $_.Extension -in '.xml', '.css', '.js' } | Sort-Object FullName)) {
+        $b = [IO.File]::ReadAllBytes($f.FullName); $ms.Write($b, 0, $b.Length)
+    }
+    $h = ($sha.ComputeHash($ms.ToArray()) | ForEach-Object { $_.ToString('x2') }) -join ''
+    $ms.Dispose(); $sha.Dispose()
+    return $h
+}
+function Get-DeadlockDir {
+    $c = @()
+    try {
+        $p = Get-Process -Name deadlock -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($p -and $p.Path) { $c += (Split-Path (Split-Path (Split-Path (Split-Path $p.Path)))) }
+    } catch { }
+    try { $sp = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath; if ($sp) { $c += (Join-Path ($sp -replace '/', '\') 'steamapps\common\Deadlock') } } catch { }
+    $c += 'C:\Program Files (x86)\Steam\steamapps\common\Deadlock'
+    foreach ($d in $c) { if ($d -and (Test-Path (Join-Path $d 'game\citadel\gameinfo.gi'))) { return $d } }
+    return $null
+}
+function Test-ModInstalled($Dl) {
+    try {
+        if (-not (Test-Path (Join-Path $Dl 'game\citadel\addons\pak98_dir.vpk'))) { return $false }
+        $gi = Get-Content (Join-Path $Dl 'game\citadel\gameinfo.gi') -Raw
+        return ($gi -match '(?m)^\s*Game\s+citadel/addons\s*$' -and $gi -match '(?m)^\s*Mod\s+citadel\s*$')
+    } catch { return $false }
+}
+function Invoke-ModCheck {
+    if ($Preview -or -not (Test-Path (Join-Path $ModDir 'build_and_install.ps1'))) { return }
+    if ($script:modProc) {
+        if (-not $script:modProc.HasExited) { return }
+        $code = $script:modProc.ExitCode
+        $script:modProc = $null
+        if ($code -eq 0) {
+            @{ hash = (Get-ModHash); installed = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content -Path $ModStatePath -Encoding UTF8
+            $script:modStatus = 'installed ' + (Get-Date).ToString('MMM d')
+            Set-Status 'Minimap mod updated: it loads next time Deadlock starts.' $colGreen
+        } else {
+            $script:modStatus = 'install failed (see data\minimap_mod.log)'
+            Set-Status 'Minimap mod could not be installed: see data\minimap_mod.log' $colRed
+        }
+        return
+    }
+    $dl = Get-DeadlockDir
+    if (-not $dl) { $script:modStatus = 'Deadlock not found'; return }
+    $state = $null
+    try { if (Test-Path $ModStatePath) { $state = Get-Content $ModStatePath -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+    $hash = Get-ModHash
+    $installed = Test-ModInstalled $dl
+    if ($installed -and $state -and $state.hash -eq $hash) {
+        if (-not $script:modStatus) { $script:modStatus = 'installed ' + ([datetime]::Parse([string]$state.installed)).ToString('MMM d') }
+        return
+    }
+    if (Get-Process -Name deadlock -ErrorAction SilentlyContinue) { $script:modStatus = 'update waiting: installs when Deadlock is closed'; return }
+    if (((Get-Date) - $script:lastModTry).TotalMinutes -lt 30) { return }
+    $script:lastModTry = Get-Date
+    try {
+        $script:modProc = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $ModDir 'build_and_install.ps1') + '"'), '-Deadlock', ('"' + $dl + '"'), '-Log', ('"' + $ModLog + '"'))
+        $script:modStatus = 'installing...'
+    } catch { $script:modStatus = 'install failed: ' + $_.Exception.Message }
+}
+
 # Refresh on its own (hidden) when the numbers are more than 18 hours old: at start-up and while running.
 # After a try it waits an hour before trying again, so a failing refresh does not loop.
 $script:lastAutoRefresh = [datetime]::MinValue
@@ -760,6 +832,9 @@ function Draw-Stats($g, [int]$Width, [bool]$Paint) {
     }
     if ($ps -and $ps.pending -gt 0) {
         $y += (Draw-CenteredText $g ('{0} match(es) not on the stats site yet; their picks come from the overlay''s own reading.' -f $ps.pending) $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 6)
+    }
+    if ($script:modStatus) {
+        $y += (Draw-CenteredText $g ('Minimap mod (regular mode): ' + $script:modStatus) $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 4)
     }
     $y += (S 6)
     $y += Draw-SectionTitle $g 'Counter items vs this enemy team' $y $Width $Paint
@@ -1403,6 +1478,7 @@ $timer.Add_Tick({
         Update-Footer
         Update-DataLabel
         Invoke-AutoRefresh
+        Invoke-ModCheck
     } catch { }
 })
 
@@ -1417,6 +1493,7 @@ Fill-Lists
 Update-View
 Update-DataLabel
 Invoke-AutoRefresh
+Invoke-ModCheck
 $form.Add_Shown({
     Update-Footer; Invoke-Rank
     # Keep this window out of screen captures, so the reader never reads its own text.
