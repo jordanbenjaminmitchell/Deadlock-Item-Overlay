@@ -16,6 +16,7 @@ Built for game build 6821 (City Never Sleeps, Oct 26 2026).
   - Orange: the Mid-Boss while it is up. Its respawn countdown joins the countdown stack in the last minute, read from the game's own Mid-Boss timer.
   - Thick gold: while you carry the Soul Urn, your team's drop-off point.
   - Faint white: the nearest shop your team can use, always.
+- **Key:** a small legend at the top-right of the minimap names each color, listing only the arrows on screen right now.
 - **Last-seen enemies:** when an enemy drops off the minimap, a faded red ring stays where they were last shown, with the seconds since (up to 45 seconds). It disappears when they show up again or die.
 - **Green glow** on crate clusters once they have spawned. A cluster goes dark after you walk through it and comes back when it should respawn. The game does not show crates on the minimap, so this is map knowledge, not live info.
 - **Countdowns at the top-left of the minimap**, starting 20 seconds before each spawn:

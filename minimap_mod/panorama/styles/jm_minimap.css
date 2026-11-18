@@ -223,6 +223,60 @@
 .jm_row.jm_mid .jm_time { color: #FF9A3C; }
 .jm_row.jm_now .jm_time { color: #7CFF8A; }
 
+/* Key: which color is which, top-right of the minimap (only arrows on screen are listed) */
+#JMKey
+{
+	horizontal-align: right;
+	vertical-align: top;
+	margin: 10px;
+	flow-children: down;
+	background-color: #0B0D10C0;
+	border-radius: 4px;
+	padding: 3px 6px 3px 6px;
+	z-index: 40;
+}
+
+/* The map is flipped for one team: flip the key back and park it in the opposite corner */
+.invert_map #JMKey
+{
+	horizontal-align: left;
+	vertical-align: bottom;
+	transform: scaleX(-1) scaleY(-1);
+}
+
+.jm_key_row
+{
+	flow-children: right;
+	margin-bottom: 1px;
+}
+
+.jm_key_swatch
+{
+	width: 14px;
+	height: 4px;
+	vertical-align: center;
+	margin-right: 5px;
+	border-radius: 2px;
+}
+
+.jm_key_swatch.jm_key_ghost
+{
+	width: 9px;
+	height: 9px;
+	margin-left: 2px;
+	margin-right: 8px;
+	border-radius: 50%;
+	border: 2px solid #FF4D4D;
+	background-color: #FF4D4D33;
+}
+
+.jm_key_text
+{
+	font-family: sans;
+	font-size: 12px;
+	color: #E8E2D6;
+}
+
 /* Debug status line (temporary, for testing) */
 .jm_debug
 {

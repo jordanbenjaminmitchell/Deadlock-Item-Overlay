@@ -330,12 +330,43 @@
       arrow.style.width = Math.max(1, Math.round((len - ARROW_GAP) / sc)) + "px";
       arrow.style.transform = "rotateZ(" + Math.round(Math.atan2(dy, dx) * 180 / Math.PI) + "deg)";
       show(arrow, true);
+      shownNow[arrow.id] = true;
     } catch (e) {
       show(arrow, false);
       if (!arrowError) { arrowError = String(e); log("arrow error " + e); }
     }
   }
   let arrowError = "";
+  let shownNow = {};   // arrow panel id -> drawn this tick (for the key)
+
+  // Key: one row per arrow (or marker) on screen right now, top-right of the minimap.
+  const KEY_ROWS = [
+    ["JMArrow_camp", "jm_arrow_camp", "Camp"],
+    ["JMArrow_vault", "jm_arrow_vault", "Sinner's Sacrifice"],
+    ["JMArrow_crate", "jm_arrow_crate", "Crates"],
+    ["JMArrow_buff", "jm_arrow_buff", "Power-up"],
+    ["JMArrow_mid", "jm_arrow_mid", "Mid-Boss"],
+    ["JMArrow_urn", "jm_arrow_urn", "Soul Urn"],
+    ["JMArrow_deliver", "jm_arrow_deliver", "Deliver Urn"],
+    ["JMArrow_rift", "jm_arrow_rift", "Rift"],
+    ["JMArrow_shop", "jm_arrow_shop", "Shop"],
+    ["ghost", "jm_key_ghost", "Last seen enemy"]
+  ];
+  let keyPanel = null;
+  const keyRows = {};
+  function renderKey() {
+    if (!ok(keyPanel)) {
+      keyPanel = makePanel("Panel", mm, "JMKey");
+      for (const [id, cls, text] of KEY_ROWS) {
+        const row = makePanel("Panel", keyPanel, "", "jm_key_row");
+        makePanel("Panel", row, "", "jm_key_swatch " + cls);
+        const lab = makePanel("Label", row, "", "jm_key_text");
+        lab.text = text;
+        keyRows[id] = row;
+      }
+    }
+    for (const [id] of KEY_ROWS) if (ok(keyRows[id])) keyRows[id].visible = !!shownNow[id];
+  }
 
   // ---------- state ----------
   let lastT = -1;
@@ -425,7 +456,7 @@
     if (!ensureLayer()) { debug("could not create overlay layer"); return; }
     const off = offReason();
     if (off) {
-      layer.visible = false; if (ok(timers)) timers.visible = false;
+      layer.visible = false; if (ok(timers)) timers.visible = false; if (ok(keyPanel)) keyPanel.visible = false;
       lastT = -1; resetMatch();
       debug("off (" + off + ")");
       return;
@@ -438,10 +469,12 @@
     }
     layer.visible = true;
     timers.visible = true;
+    if (ok(keyPanel)) keyPanel.visible = true;
     if (t + 5 < lastT) resetMatch(); // clock went backwards: new match
     lastT = t;
 
     diagnose(t);
+    shownNow = {};
     const s = scan();
     calibrate(s, dim);
     const rows = [];
@@ -607,10 +640,12 @@
       g.label.text = Math.max(1, Math.round(age)) + "s";
       g.panel.style.opacity = (0.95 - 0.6 * age / GHOST_SECONDS).toFixed(2);
       show(g.panel, true);
+      shownNow.ghost = true;
     }
     for (; gi < ghosts.length; gi++) show(ghosts[gi].panel, false);
 
     render(rows);
+    renderKey();
     debug(fmt(t) + " | me " + (me ? me.u.toFixed(3) + "," + me.v.toFixed(3) : "NO") +
       " | near " + (nearName || "-") + " | sinner " + (nearV >= 0 ? CAMPS[nearV][3] : "-") +
       " | calib " + (calib.live ? "live" : "fallback") + " | rows " + rows.length +
