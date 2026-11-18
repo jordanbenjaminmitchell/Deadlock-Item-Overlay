@@ -494,8 +494,16 @@ function Invoke-ModCheck {
             $script:modStatus = 'installed ' + (Get-Date).ToString('MMM d')
             Set-Status 'Minimap mod updated: it loads next time Deadlock starts.' $colGreen
         } else {
-            $script:modStatus = 'install failed (see data\minimap_mod.log)'
-            Set-Status 'Minimap mod could not be installed: see data\minimap_mod.log' $colRed
+            # Deadlock still closing when the install started: try again in a minute instead of 30.
+            $busy = $false
+            try { $busy = (Get-Content $ModLog -Raw) -match 'Close Deadlock first' } catch { }
+            if ($busy) {
+                $script:lastModTry = (Get-Date).AddMinutes(-29)
+                $script:modStatus = 'update waiting: installs when Deadlock is closed'
+            } else {
+                $script:modStatus = 'install failed (see data\minimap_mod.log)'
+                Set-Status 'Minimap mod could not be installed: see data\minimap_mod.log' $colRed
+            }
         }
         return
     }
