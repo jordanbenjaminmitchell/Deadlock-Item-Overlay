@@ -122,7 +122,6 @@
 		</snippet>
 	</snippets>
 	<Panel class="HudMinimap" hittest="true">
-		<Label id="JMDebug" class="jm_debug" text="MR: layout loaded, script not running" hittest="false" />
 		<GlobalClassListener classes="gScoreboardOpen gDetailView" />
 		<Panel id="MinimapBackgroundTest" class="NewMinimapBackgroundsContainer" hittest="false" hittestchildren="false">
 			<Image class="can_zoom backgroundImage1" src="s2r://panorama/images/minimap/base/minimap_midtown_mid_psd.vtex" />

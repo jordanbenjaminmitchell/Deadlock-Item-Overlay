@@ -20,7 +20,7 @@
   const WARN_SECONDS = 20;     // countdowns appear this long before a spawn
   const MAX_ROWS = 6;
   const TICK = 0.25;           // seconds between updates
-  const DEBUG = true;          // on-minimap status line while testing
+  const DEBUG = false;         // on-minimap status line (needs the JMDebug label back in hud_minimap.xml)
   const DIAG = false;          // console dump of minimap classes (not needed now)
 
   // ---------- schedules (City Never Sleeps, build 6821) ----------
@@ -257,7 +257,7 @@
       }
       if (b.BHasClass("idol_return_friendly") || (b.BHasClass("idol_return") && b.BHasClass("friend"))) { if (!hidden) out.urnReturn = pos; continue; }
       // Shops: only your team's (enemy shops won't sell to you).
-      if (b.BHasClass("shop") && !b.BHasClass("shop_tunnel_exit")) {
+      if ((b.BHasClass("shop") || b.BHasClass("tier1_shop")) && !b.BHasClass("shop_tunnel_exit")) {
         if (!b.BHasClass("enemy")) out.shops.push({ x: pos.x, y: pos.y, friend: b.BHasClass("friend") });
         continue;
       }
@@ -539,16 +539,14 @@
       const c = CRATES[i], g = CRATE_GROUP[c[2]];
       if (pm && t >= g.first && Math.hypot(pm.u - c[0], pm.v - c[1]) < CRATE_VISIT_RADIUS) crateLooted[i] = t;
       const looted = crateLooted[i] !== undefined && t - crateLooted[i] < g.respawn;
-      if (ok(crateDots[i])) {
-        place(crateDots[i], toPx(c[0], c[1]), dim);
-        show(crateDots[i], t >= g.first && !looted);
-      }
+      if (ok(crateDots[i])) show(crateDots[i], false);   // only the nearest one is shown, below
       if (pm && t >= g.first && !looted) {
         const d = Math.hypot(pm.u - c[0], pm.v - c[1]);
         if (d < nearCD) { nearCD = d; nearC = i; }
       }
     }
 
+    if (nearC >= 0 && ok(crateDots[nearC])) { place(crateDots[nearC], toPx(CRATES[nearC][0], CRATES[nearC][1]), dim); show(crateDots[nearC], true); }
     aim(arrows.crate, s.player, nearC >= 0 ? toPx(CRATES[nearC][0], CRATES[nearC][1]) : null, dim);
 
     // 3) power-ups on the bridges: 5:00 and every 5:00
