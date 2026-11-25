@@ -1,6 +1,6 @@
 # Street Brawl item overlay window.
 # Detects your hero and the offered items from the screen, and ranks the items with Street Brawl stats.
-# Ctrl+Alt+D toggles click-through. Ctrl+Alt+R re-detects the hero and enemy team.
+# Ctrl+Alt+D toggles click-through. Ctrl+Alt+R re-detects the hero and enemy team. Ctrl+Alt+P toggles practice tips.
 # Optional ding when an active item (Z X C V) comes off cooldown: reads the key labels only, never presses keys. Windows PowerShell 5.1, no downloads.
 
 param([switch]$Preview, [switch]$Demo, [string]$DemoHero = 'Ivy', [string]$DemoItems = 'Burst Fire|Superior Duration|Spirit Resilience', [string]$DemoEnhanced = 'Burst Fire', [string]$DemoRare = '', [string]$DemoStatus = 'Choice 2 of 3   |   1 re-roll left', [string]$DemoEnemies = '')
@@ -47,9 +47,10 @@ public class OverlayForm : Form {
         RegisterHotKey(this.Handle, 3, 0x0001 | 0x0002 | 0x4000, (uint)Keys.E);
         RegisterHotKey(this.Handle, 4, 0x0001 | 0x0002 | 0x4000, (uint)Keys.T);
         RegisterHotKey(this.Handle, 5, 0x0001 | 0x0002 | 0x4000, (uint)Keys.R);
+        RegisterHotKey(this.Handle, 6, 0x0001 | 0x0002 | 0x4000, (uint)Keys.P);
         try { int round = 2; DwmSetWindowAttribute(this.Handle, 33, ref round, 4); } catch { }
     }
-    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); UnregisterHotKey(this.Handle, 4); UnregisterHotKey(this.Handle, 5); base.OnHandleDestroyed(e); }
+    protected override void OnHandleDestroyed(EventArgs e) { UnregisterHotKey(this.Handle, 1); UnregisterHotKey(this.Handle, 2); UnregisterHotKey(this.Handle, 3); UnregisterHotKey(this.Handle, 4); UnregisterHotKey(this.Handle, 5); UnregisterHotKey(this.Handle, 6); base.OnHandleDestroyed(e); }
     protected override void WndProc(ref Message m) {
         if (m.Msg == WM_HOTKEY && HotkeyPressed != null) { LastHotkey = (int)m.WParam; HotkeyPressed(this, EventArgs.Empty); }
         base.WndProc(ref m);
@@ -61,6 +62,14 @@ public class OverlayForm : Form {
         ClickThrough = on;
     }
     public void StartDrag() { ReleaseCapture(); SendMessage(this.Handle, 0xA1, 0x2, 0); }
+}
+
+// Practice tip strip: always click-through, never takes focus, not in the taskbar or Alt+Tab.
+public class CoachForm : Form {
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x80000 | 0x20 | 0x80 | 0x8000000; return cp; }
+    }
 }
 '@
 }
@@ -86,6 +95,7 @@ if ($null -eq $settings) { $settings = [pscustomobject]@{ x = 60; y = 240; opaci
 if ($null -eq $settings.PSObject.Properties['auto']) { $settings | Add-Member -NotePropertyName auto -NotePropertyValue $true }
 $settings.auto = $true
 if ($null -eq $settings.PSObject.Properties['enhBoost']) { $settings | Add-Member -NotePropertyName enhBoost -NotePropertyValue $false }
+if ($null -eq $settings.PSObject.Properties['coach']) { $settings | Add-Member -NotePropertyName coach -NotePropertyValue $true }
 if ($null -eq $settings.PSObject.Properties['ding']) { $settings | Add-Member -NotePropertyName ding -NotePropertyValue 'ZXCV' }
 if ($null -eq $settings.PSObject.Properties['slotOffsets']) { $settings | Add-Member -NotePropertyName slotOffsets -NotePropertyValue @() }
 
@@ -151,6 +161,37 @@ function Get-BookPlan([string]$HeroId) {
         return $t
     }
     return ''
+}
+
+# Practice tips: the guide's fight tips for every enemy on the field, taken in turn (enemy 1 tip 1, enemy 2
+# tip 1, ..., enemy 1 tip 2, ...). Research labels ("Strategy inference:" and so on) are trimmed off.
+function Get-CoachTips {
+    if (-not $script:book) { return @() }
+    $per = @()
+    foreach ($e in @($script:enemyIds)) {
+        $n = Get-HeroName ([string]$e)
+        $tips = @($script:book.hero_mechanics_tips.$n | ForEach-Object {
+            $t = [string]$_[1]
+            $t = $t -replace '^(?i)(positioning|strategy|counter)\s+(inference|recommendation):\s*', ''
+            $t = $t -replace '\s*(?i)transcript-based recommendation\.?\s*$', ''
+            $t = $t.Trim()
+            if ($t.Length -gt 0) { $t = $t.Substring(0, 1).ToUpper() + $t.Substring(1) }
+            $t
+        } | Where-Object { $_ })
+        if ($tips.Count -gt 0) { $per += ,@([string]$e, $tips) }
+    }
+    $out = @()
+    $max = 0
+    foreach ($x in $per) { if ($x[1].Count -gt $max) { $max = $x[1].Count } }
+    for ($i = 0; $i -lt $max; $i++) {
+        foreach ($x in $per) { if ($i -lt $x[1].Count) { $out += [pscustomobject]@{ hero = $x[0]; text = $x[1][$i] } } }
+    }
+    return $out
+}
+function Get-CurrentTip {
+    $all = @(Get-CoachTips)
+    if ($all.Count -eq 0) { return $null }
+    return $all[$script:tipIndex % $all.Count]
 }
 
 # Abilities of one enemy that can be parried (basic melee always can, so it is left out).
@@ -880,19 +921,19 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
     }
     $y = (S 2) + $maxH + (S 8)
     # One quiet line: the guide's plan against one enemy at a time, cycling through the team.
-    $plans = @(@($script:enemyIds) | Where-Object { Get-BookPlan ([string]$_) })
-    if ($plans.Count -gt 0) {
-        $eid = [string]$plans[$script:planIndex % $plans.Count]
-        $txt = 'vs ' + (Get-HeroName $eid) + ': ' + (Get-BookPlan $eid)
+    $tip = Get-CurrentTip
+    if ($tip) {
+        # Two lines are reserved so the window does not change size as tips rotate.
         $isz = [float](S 16)
+        $tx = $isz + (S 6)
+        $txt = (Get-HeroName $tip.hero) + ': ' + $tip.text
+        $lineH = [float]$g.MeasureString('Ag', $fontSmall).Height
         if ($Paint) {
-            $tw = [Math]::Min([float]$g.MeasureString($txt, $fontSmall).Width, [float]($Width - $isz - (S 10)))
-            $x0 = [float](($Width - ($isz + (S 5) + $tw)) / 2)
-            Draw-Portrait $g $eid $x0 ([float]$y) $isz $colBrassDim
-            $sf = New-Object Drawing.StringFormat; $sf.Trimming = 'EllipsisCharacter'; $sf.FormatFlags = 'NoWrap'
-            $g.DrawString($txt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF(($x0 + $isz + (S 5)), [float]($y + (S 1)), ($tw + (S 4)), [float]$isz)), $sf)
+            Draw-Portrait $g $tip.hero ([float]0) ([float]$y) $isz $colBrassDim
+            $sf = New-Object Drawing.StringFormat; $sf.Trimming = 'EllipsisWord'
+            $g.DrawString($txt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF($tx, [float]$y, [float]($Width - $tx), [float]($lineH * 2 + 1))), $sf)
         }
-        $y += $isz + (S 6)
+        $y += [Math]::Max($isz, $lineH * 2) + (S 6)
     }
     # Parryable abilities on the enemy team: rare, so this line stays up (in gold) whenever there are any.
     $par = @()
@@ -1160,6 +1201,7 @@ $form.Add_HotkeyPressed({
     if ($form.LastHotkey -eq 3) { Switch-Boost; return }
     if ($form.LastHotkey -eq 4) { Switch-Stats; return }
     if ($form.LastHotkey -eq 5) { Reset-Detection; return }
+    if ($form.LastHotkey -eq 6) { Switch-Coach; return }
     if ($form.LastHotkey -eq 2) {
         # Ctrl+Alt+S: pin the window visible outside the item phase (or unpin).
         $script:pinned = -not $script:pinned
@@ -1582,10 +1624,83 @@ function Invoke-DingTick {
         $script:slotInfo = $info -join ' '
     } catch { $script:slotInfo = 'error: ' + $_.Exception.Message } finally { if ($band) { $band.Dispose() } }
 }
-$script:planIndex = 0
+# ---------- practice tips strip (while you brawl) ----------
+$script:tipIndex = 0
+$fontCoach = New-FontSafe 'Segoe UI' 10
+$coach = New-Object CoachForm
+$coach.FormBorderStyle = 'None'
+$coach.TopMost = $true
+$coach.ShowInTaskbar = $false
+$coach.StartPosition = 'Manual'
+$coach.BackColor = C 18 14 11
+$coach.Opacity = 0.86
+$coach.AutoScaleMode = 'None'
+$script:coachTip = $null
+function Update-CoachLayout {
+    $scr = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $u = $scr.Height / 1080.0
+    $w = [int](600 * $u)
+    $g = $coach.CreateGraphics()
+    try {
+        $txt = ''
+        if ($script:coachTip) { $txt = (Get-HeroName $script:coachTip.hero) + ': ' + $script:coachTip.text }
+        $th = $g.MeasureString($txt, $fontCoach, [int]($w - (40 * $u))).Height
+    } finally { $g.Dispose() }
+    $h = [int]([Math]::Max(30 * $u, $th + 12 * $u))
+    # Just under the hero portraits along the top of the screen, centred.
+    $coach.SetBounds([int]($scr.X + ($scr.Width - $w) / 2), [int]($scr.Y + 112 * $u), $w, $h)
+}
+$coach.Add_Paint({
+    param($s, $e)
+    $g = $e.Graphics
+    $g.SmoothingMode = 'AntiAlias'
+    $g.TextRenderingHint = 'ClearTypeGridFit'
+    $t = $script:coachTip
+    if (-not $t) { return }
+    $u = [Windows.Forms.Screen]::PrimaryScreen.Bounds.Height / 1080.0
+    $pen = New-Object Drawing.Pen($colLine, 1)
+    $g.DrawRectangle($pen, 0, 0, $coach.ClientSize.Width - 1, $coach.ClientSize.Height - 1)
+    $pen.Dispose()
+    $d = [float](22 * $u)
+    Draw-Portrait $g ([string]$t.hero) ([float](7 * $u)) ([float](($coach.ClientSize.Height - $d) / 2)) $d $colBrass
+    $tx = [float](36 * $u)
+    $name = (Get-HeroName $t.hero) + ': '
+    $g.DrawString(($name + $t.text), $fontCoach, (Get-Brush $colText), (New-Object Drawing.RectangleF($tx, [float](6 * $u), [float]($coach.ClientSize.Width - $tx - 6 * $u), [float]($coach.ClientSize.Height))))
+})
+function Update-Coach {
+    $want = $settings.coach -and $script:fgDeadlock -and -not $script:shopVisible -and -not $Preview
+    $tip = $null
+    if ($want) { $tip = Get-CurrentTip }
+    if (-not $tip) {
+        if ($coach.Visible) { $coach.Hide() }
+        return
+    }
+    if (-not $script:coachTip -or $script:coachTip.text -ne $tip.text) {
+        $script:coachTip = $tip
+        Update-CoachLayout
+        $coach.Invalidate()
+    }
+    if (-not $coach.Visible) {
+        $coach.Show()
+        try { [void][ScreenReader]::SetWindowDisplayAffinity($coach.Handle, 0x11) } catch { }
+    }
+}
+function Switch-Coach {
+    $settings.coach = -not $settings.coach
+    Save-Settings
+    if ($settings.coach) { Set-Status 'Practice tips on (Ctrl+Alt+P to hide)' $colBrass } else { Set-Status 'Practice tips off (Ctrl+Alt+P to show)' $colBrassDim }
+    Update-Coach
+}
 $planTimer = New-Object Windows.Forms.Timer
-$planTimer.Interval = 7000
-$planTimer.Add_Tick({ if ($script:view.kind -eq 'rank' -and @($script:enemyIds).Count -gt 1) { $script:planIndex++; $cards.Invalidate() } })
+$planTimer.Interval = 12000
+$planTimer.Add_Tick({
+    $script:tipIndex++
+    if ($script:view.kind -eq 'rank') { $cards.Invalidate() }
+    try { Update-Coach } catch { }
+})
+$coachTick = New-Object Windows.Forms.Timer
+$coachTick.Interval = 1000
+$coachTick.Add_Tick({ try { Update-Coach } catch { } })
 
 $dingTimer = New-Object Windows.Forms.Timer
 $dingTimer.Interval = 300
@@ -1656,7 +1771,9 @@ $timer.Start()
 $screenTimer.Start()
 $dingTimer.Start()
 $planTimer.Start()
+$coachTick.Start()
 [Windows.Forms.Application]::Run($form)
+$coachTick.Stop()
 $timer.Stop()
 $screenTimer.Stop()
 $dingTimer.Stop()
