@@ -135,6 +135,31 @@ function Get-BookProfile([string]$HeroId) {
     if (-not $n) { return $null }
     return $script:book.profiles.$n
 }
+# One short plan line for an enemy: the guide's headline, or (when that is only "How to fight X") the first
+# sentence of its first fight tip.
+function Get-BookPlan([string]$HeroId) {
+    $p = Get-BookProfile $HeroId
+    if (-not $p) { return '' }
+    $h = [string]$p.headline
+    if ($h -and $h -notmatch '^(?i)how to fight') { return $h }
+    $n = Get-HeroName $HeroId
+    $tips = @($script:book.hero_mechanics_tips.$n)
+    if ($tips.Count -gt 0 -and $tips[0]) {
+        $t = [string]$tips[0][1]
+        $m = [regex]::Match($t, '^.*?[.!?](\s|$)')
+        if ($m.Success) { return $m.Value.Trim() }
+        return $t
+    }
+    return ''
+}
+
+# Abilities of one enemy that can be parried (basic melee always can, so it is left out).
+function Get-BookParries([string]$HeroId) {
+    $p = Get-BookProfile $HeroId
+    if (-not $p) { return @() }
+    return @(@($p.parries) | Where-Object { ([string]$_[1]) -match '^Yes' -and ([string]$_[0]) -notmatch '(?i)melee' } | ForEach-Object { ([string]$_[0]) -replace '^\d+\s*.\s*', '' })
+}
+
 # Guide grade (A or A*) for an item against one enemy, or ''.
 function Get-BookGrade([string]$HeroId, [string]$ItemName) {
     $p = Get-BookProfile $HeroId
@@ -855,11 +880,10 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
     }
     $y = (S 2) + $maxH + (S 8)
     # One quiet line: the guide's plan against one enemy at a time, cycling through the team.
-    $plans = @(@($script:enemyIds) | Where-Object { Get-BookProfile ([string]$_) })
+    $plans = @(@($script:enemyIds) | Where-Object { Get-BookPlan ([string]$_) })
     if ($plans.Count -gt 0) {
         $eid = [string]$plans[$script:planIndex % $plans.Count]
-        $p = Get-BookProfile $eid
-        $txt = 'vs ' + (Get-HeroName $eid) + ': ' + [string]$p.headline
+        $txt = 'vs ' + (Get-HeroName $eid) + ': ' + (Get-BookPlan $eid)
         $isz = [float](S 16)
         if ($Paint) {
             $tw = [Math]::Min([float]$g.MeasureString($txt, $fontSmall).Width, [float]($Width - $isz - (S 10)))
@@ -869,6 +893,12 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
             $g.DrawString($txt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF(($x0 + $isz + (S 5)), [float]($y + (S 1)), ($tw + (S 4)), [float]$isz)), $sf)
         }
         $y += $isz + (S 6)
+    }
+    # Parryable abilities on the enemy team: rare, so this line stays up (in gold) whenever there are any.
+    $par = @()
+    foreach ($e in @($script:enemyIds)) { foreach ($a in @(Get-BookParries ([string]$e))) { $par += ((Get-HeroName ([string]$e)) + ' ' + $a) } }
+    if ($par.Count -gt 0) {
+        $y += (Draw-CenteredText $g ('Parry: ' + ($par -join ', ')) $fontSmall $colBrass 0 $y $Width $Paint) + (S 4)
     }
     return [int]$y
 }
@@ -942,9 +972,13 @@ function Draw-Stats($g, [int]$Width, [bool]$Paint) {
             $y += [Math]::Max([float](S 20), [float]($th + (S 4)))
             $p = Get-BookProfile ([string]$eid)
             if ($p) {
-                $noParry = @(@($p.parries) | Where-Object { ([string]$_[1]) -match '^No' } | ForEach-Object { ([string]$_[0]) -replace '^\d+\s*.\s*', '' })
-                $lines = @([string]$p.headline, ('Build: ' + [string]$p.quick))
-                if ($noParry.Count -gt 0) { $lines += ('Can''t parry: ' + ($noParry -join ', ')) }
+                # Street Brawl: you pick from offers, so list the guide's A-grade counters (no buy order or costs).
+                $look = @(@($p.items) | Where-Object { ([string]$_[2]).StartsWith('A') } | Sort-Object { [int]$_[1] } | ForEach-Object { [string]$_[0] } | Select-Object -Unique)
+                # Almost nothing is parryable, so only name the abilities that are (basic melee always is).
+                $canParry = @(Get-BookParries ([string]$eid))
+                $lines = @((Get-BookPlan ([string]$eid)))
+                if ($look.Count -gt 0) { $lines += ('Look for: ' + ($look -join ', ')) }
+                if ($canParry.Count -gt 0) { $lines += ('Parry: ' + ($canParry -join ', ')) }
                 $bt = $lines -join "`n"
                 $bh = $g.MeasureString($bt, $fontSmall, [int]($Width - $tx)).Height
                 if ($Paint) { $g.DrawString($bt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF($tx, [float]$y, [float]($Width - $tx), [float]($bh + 2)))) }
@@ -952,7 +986,7 @@ function Draw-Stats($g, [int]$Width, [bool]$Paint) {
             }
         }
         if ($script:book) {
-            $y += (Draw-CenteredText $g ('Plans and grades: counterbook (' + [string]$script:book.as_of + '). Green numbers are from match stats.') $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 2)
+            $y += (Draw-CenteredText $g ('Plans and A-grade counters: counterbook (' + [string]$script:book.as_of + '). Green numbers are from match stats.') $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 2)
         }
     }
     $y += (S 6)
