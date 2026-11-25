@@ -110,6 +110,54 @@ function Load-Data {
     $script:portraitCache = @{}
     $script:itemNameById = @{}
     foreach ($i in $script:snap.items) { $script:itemNameById[[string]$i.id] = $i.name }
+    Load-Counterbook
+}
+
+# Counterbook: the newest *counterbook*.html in this folder (a research guide with a per-hero plan, graded
+# counter items and parry notes). Its data sits in a <script id="project-data"> JSON block.
+$script:book = $null
+$script:bookFile = ''
+function Load-Counterbook {
+    try {
+        $f = Get-ChildItem $PSScriptRoot -Filter '*counterbook*.html' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $f) { $script:book = $null; return }
+        if ($script:book -and $script:bookFile -eq ($f.FullName + '|' + $f.LastWriteTime.Ticks)) { return }
+        $html = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)
+        $m = [regex]::Match($html, '<script id="project-data" type="application/json">(.*?)</script>', 'Singleline')
+        if (-not $m.Success) { $script:book = $null; return }
+        $script:book = $m.Groups[1].Value | ConvertFrom-Json
+        $script:bookFile = $f.FullName + '|' + $f.LastWriteTime.Ticks
+    } catch { $script:book = $null }
+}
+function Get-BookProfile([string]$HeroId) {
+    if (-not $script:book -or -not $HeroId) { return $null }
+    $n = Get-HeroName $HeroId
+    if (-not $n) { return $null }
+    return $script:book.profiles.$n
+}
+# Guide grade (A or A*) for an item against one enemy, or ''.
+function Get-BookGrade([string]$HeroId, [string]$ItemName) {
+    $p = Get-BookProfile $HeroId
+    if (-not $p) { return '' }
+    foreach ($it in @($p.items)) {
+        if ([string]$it[0] -eq $ItemName -and ([string]$it[2]).StartsWith('A')) { return ([string]$it[2]).Trim() }
+    }
+    return ''
+}
+# Tags under an item: stats counters (+pp) and guide grades (A), one per enemy.
+function Get-ItemTags($x) {
+    $out = @()
+    $stats = @{}
+    foreach ($t in @(Get-CounterTags $script:snap $x.id $script:enemyIds)) { $stats[$t.hero] = $t.pp }
+    foreach ($e in @($script:enemyIds)) {
+        $e = [string]$e
+        $gr = Get-BookGrade $e $x.name
+        $pp = $null
+        if ($stats.ContainsKey($e)) { $pp = $stats[$e] }
+        if ($null -eq $pp -and -not $gr) { continue }
+        $out += [pscustomobject]@{ hero = $e; pp = $pp; grade = $gr }
+    }
+    return @($out | Sort-Object @{ Expression = { if ($null -ne $_.pp) { $_.pp } else { 0 } } } -Descending)
 }
 
 # Build number of the installed game (from its steam.inf), to compare with the stats build.
@@ -267,7 +315,12 @@ function Draw-CounterTags($g, $Tags, [float]$left, [float]$colW, [float]$top, [b
     $y = $top
     for ($i = 0; $i -lt $tags.Count; $i += 2) {
         $line = @($tags[$i..([Math]::Min($i + 1, $tags.Count - 1))])
-        $texts = @($line | ForEach-Object { '+{0:0.0}' -f $_.pp })
+        $texts = @($line | ForEach-Object {
+            $parts = @()
+            if ($null -ne $_.pp) { $parts += ('+{0:0.0}' -f $_.pp) }
+            if ($_.grade) { $parts += $_.grade }
+            $parts -join ' '
+        })
         $ws = @($texts | ForEach-Object { $g.MeasureString($_, $fontSmall).Width })
         $total = 0.0
         for ($k = 0; $k -lt $line.Count; $k++) { $total += $isz + $pad + $ws[$k] }
@@ -275,8 +328,11 @@ function Draw-CounterTags($g, $Tags, [float]$left, [float]$colW, [float]$top, [b
         $x = $left + ($colW - $total) / 2
         if ($Paint) {
             for ($k = 0; $k -lt $line.Count; $k++) {
-                Draw-Portrait $g $line[$k].hero ([float]$x) ([float]$y) $isz $colGreen
-                $g.DrawString($texts[$k], $fontSmall, (Get-Brush $colGreen), [float]($x + $isz + $pad - (S 1)), [float]($y + ($isz - $g.MeasureString($texts[$k], $fontSmall).Height) / 2))
+                # green = backed by the stats (+pp), brass = guide grade only
+                $tc = $colGreen
+                if ($null -eq $line[$k].pp) { $tc = $colBrass }
+                Draw-Portrait $g $line[$k].hero ([float]$x) ([float]$y) $isz $tc
+                $g.DrawString($texts[$k], $fontSmall, (Get-Brush $tc), [float]($x + $isz + $pad - (S 1)), [float]($y + ($isz - $g.MeasureString($texts[$k], $fontSmall).Height) / 2))
                 $x += $isz + $pad + $ws[$k] + $gap
             }
         }
@@ -718,7 +774,7 @@ function Draw-ItemColumn($g, $x, [int]$Rank, [float]$left, [float]$colW, [float]
     if ($null -ne $x.score -and $x.score -le -0.5) { $vc = $colRed }
     $y += (Draw-CenteredText $g $line2 $fontSmall $vc $left $y $colW $Paint)
     if ($marks.Count -gt 0) { $y += (Draw-CenteredText $g ($marks -join '   ') $fontSmall $colBrass $left $y $colW $Paint) }
-    $ct = @(Get-CounterTags $script:snap $x.id $script:enemyIds)
+    $ct = @(Get-ItemTags $x)
     if ($ct.Count -gt 0) { $y += (S 3); $y += (Draw-CounterTags $g $ct $left $colW $y $Paint) }
     if ($script:tooltipStats.ContainsKey($x.name)) {
         $y += (S 4)
@@ -798,6 +854,22 @@ function Draw-View($g, [int]$Width, [bool]$Paint) {
         if ($hh -gt $maxH) { $maxH = $hh }
     }
     $y = (S 2) + $maxH + (S 8)
+    # One quiet line: the guide's plan against one enemy at a time, cycling through the team.
+    $plans = @(@($script:enemyIds) | Where-Object { Get-BookProfile ([string]$_) })
+    if ($plans.Count -gt 0) {
+        $eid = [string]$plans[$script:planIndex % $plans.Count]
+        $p = Get-BookProfile $eid
+        $txt = 'vs ' + (Get-HeroName $eid) + ': ' + [string]$p.headline
+        $isz = [float](S 16)
+        if ($Paint) {
+            $tw = [Math]::Min([float]$g.MeasureString($txt, $fontSmall).Width, [float]($Width - $isz - (S 10)))
+            $x0 = [float](($Width - ($isz + (S 5) + $tw)) / 2)
+            Draw-Portrait $g $eid $x0 ([float]$y) $isz $colBrassDim
+            $sf = New-Object Drawing.StringFormat; $sf.Trimming = 'EllipsisCharacter'; $sf.FormatFlags = 'NoWrap'
+            $g.DrawString($txt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF(($x0 + $isz + (S 5)), [float]($y + (S 1)), ($tw + (S 4)), [float]$isz)), $sf)
+        }
+        $y += $isz + (S 6)
+    }
     return [int]$y
 }
 
@@ -868,6 +940,19 @@ function Draw-Stats($g, [int]$Width, [bool]$Paint) {
                 $g.DrawString($txt, $fontSmall, (Get-Brush $tc), (New-Object Drawing.RectangleF($tx, [float]($y + (S 1)), [float]($Width - $tx), [float]($th + 2))))
             }
             $y += [Math]::Max([float](S 20), [float]($th + (S 4)))
+            $p = Get-BookProfile ([string]$eid)
+            if ($p) {
+                $noParry = @(@($p.parries) | Where-Object { ([string]$_[1]) -match '^No' } | ForEach-Object { ([string]$_[0]) -replace '^\d+\s*.\s*', '' })
+                $lines = @([string]$p.headline, ('Build: ' + [string]$p.quick))
+                if ($noParry.Count -gt 0) { $lines += ('Can''t parry: ' + ($noParry -join ', ')) }
+                $bt = $lines -join "`n"
+                $bh = $g.MeasureString($bt, $fontSmall, [int]($Width - $tx)).Height
+                if ($Paint) { $g.DrawString($bt, $fontSmall, (Get-Brush $colBrassDim), (New-Object Drawing.RectangleF($tx, [float]$y, [float]($Width - $tx), [float]($bh + 2)))) }
+                $y += $bh + (S 6)
+            }
+        }
+        if ($script:book) {
+            $y += (Draw-CenteredText $g ('Plans and grades: counterbook (' + [string]$script:book.as_of + '). Green numbers are from match stats.') $fontSmall $colBrassDim 0 $y $Width $Paint) + (S 2)
         }
     }
     $y += (S 6)
@@ -1463,6 +1548,11 @@ function Invoke-DingTick {
         $script:slotInfo = $info -join ' '
     } catch { $script:slotInfo = 'error: ' + $_.Exception.Message } finally { if ($band) { $band.Dispose() } }
 }
+$script:planIndex = 0
+$planTimer = New-Object Windows.Forms.Timer
+$planTimer.Interval = 7000
+$planTimer.Add_Tick({ if ($script:view.kind -eq 'rank' -and @($script:enemyIds).Count -gt 1) { $script:planIndex++; $cards.Invalidate() } })
+
 $dingTimer = New-Object Windows.Forms.Timer
 $dingTimer.Interval = 300
 $dingTimer.Add_Tick({ Invoke-DingTick })
@@ -1487,6 +1577,7 @@ $timer.Add_Tick({
         Update-DataLabel
         Invoke-AutoRefresh
         Invoke-ModCheck
+        Load-Counterbook
     } catch { }
 })
 
@@ -1530,6 +1621,7 @@ $form.Add_Shown({
 $timer.Start()
 $screenTimer.Start()
 $dingTimer.Start()
+$planTimer.Start()
 [Windows.Forms.Application]::Run($form)
 $timer.Stop()
 $screenTimer.Stop()
